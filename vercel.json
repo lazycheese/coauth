@@ -1,0 +1,46 @@
+{
+  "framework": "vite",
+  "cleanUrls": true,
+  "rewrites": [
+    { "source": "/.well-known/mcp", "destination": "/api/mcp" }
+  ],
+  "headers": [
+    {
+      "source": "/",
+      "headers": [{ "key": "Vary", "value": "Accept, Accept-Encoding" }]
+    },
+    {
+      "source": "/api/(.*)",
+      "headers": [
+        { "key": "Vary", "value": "Accept, Accept-Encoding" },
+        { "key": "API-Version", "value": "1.0.0" },
+        { "key": "RateLimit-Limit", "value": "120" },
+        { "key": "RateLimit-Policy", "value": "120;w=60" }
+      ]
+    },
+    {
+      "source": "/api/patient/(.*)",
+      "headers": [
+        { "key": "Deprecation", "value": "true" },
+        { "key": "Sunset", "value": "Fri, 27 Aug 2027 00:00:00 GMT" },
+        { "key": "Link", "value": "</api/v1/patient/{id}>; rel=\"successor-version\"" }
+      ]
+    },
+    {
+      "source": "/api/payer-rules",
+      "headers": [
+        { "key": "Deprecation", "value": "true" },
+        { "key": "Sunset", "value": "Fri, 27 Aug 2027 00:00:00 GMT" },
+        { "key": "Link", "value": "</api/v1/payer-rules>; rel=\"successor-version\"" }
+      ]
+    },
+    {
+      "source": "/api/validate",
+      "headers": [
+        { "key": "Deprecation", "value": "true" },
+        { "key": "Sunset", "value": "Fri, 27 Aug 2027 00:00:00 GMT" },
+        { "key": "Link", "value": "</api/v1/validate>; rel=\"successor-version\"" }
+      ]
+    }
+  ]
+}

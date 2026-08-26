@@ -1,0 +1,104 @@
+import { useState } from "react";
+import { useCoAuth } from "../store/coauthStore";
+import { tools } from "../mcp/registerTools";
+
+const submitTool = () => tools.find((t) => t.name === "submit")!;
+
+export function ReviewSign() {
+  const validation = useCoAuth((s) => s.validation);
+  const approvalToken = useCoAuth((s) => s.approvalToken);
+  const auditLog = useCoAuth((s) => s.auditLog);
+  const submitResult = useCoAuth((s) => s.submitResult);
+  const sign = useCoAuth((s) => s.sign);
+  const logActivity = useCoAuth((s) => s.logActivity);
+  const [attested, setAttested] = useState(false);
+
+  const conflicts = useCoAuth((s) => s.conflicts);
+  const overrides = useCoAuth((s) => s.overrides);
+  const unresolvedCritical = conflicts.filter((c) => c.requiresHumanOverride && !overrides[c.id]);
+
+  const judgmentPending = validation?.results.filter((r) => !r.ok && r.requiresHumanJudgment) ?? [];
+  const missing = validation?.failCount ?? 0;
+  const canSign = missing === 0 && judgmentPending.length === 0 && unresolvedCritical.length === 0 && attested && !approvalToken;
+
+  const onSign = () => {
+    sign("I attest this prior authorization is clinically accurate.");
+    logActivity("human", "sign", "Clinician signed & attested");
+  };
+  const onSubmit = () => {
+    logActivity("human", "submit", "Requested submission");
+    submitTool().execute({});
+  };
+
+  return (
+    <div className="review-sign" data-testid="review-sign">
+      <h3>Review &amp; Sign</h3>
+
+      {submitResult?.status === "blocked" && (
+        <div className="banner banner-blocked" data-testid="blocked-banner">
+          Agent attempted to submit - <strong>blocked</strong>. Clinician signature required.
+        </div>
+      )}
+      {submitResult?.status === "submitted" && (
+        <div className="success-card" data-testid="submitted-banner">
+          <div className="success-check" aria-hidden="true"></div>
+          <div className="success-title">Submitted to payer</div>
+          <div className="success-id">{submitResult.confirmationId}</div>
+          <div className="success-sub">Clinician-signed · conflict-checked · audit-logged</div>
+        </div>
+      )}
+
+      {missing > 0 && <p className="muted">{missing} required field(s) still missing.</p>}
+      {unresolvedCritical.length > 0 && (
+        <p className="muted danger-text" data-testid="critical-block-note">
+          {unresolvedCritical.length} critical conflict(s) need a clinical override before signing.
+        </p>
+      )}
+
+      {judgmentPending.length > 0 && (
+        <div className="judgment-list">
+          <p className="muted">Needs your clinical judgment:</p>
+          <ul>
+            {judgmentPending.map((r) => (
+              <li key={r.fieldId}>{r.label}</li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {!approvalToken ? (
+        <>
+          <label className="attest">
+            <input
+              type="checkbox"
+              data-testid="attest-checkbox"
+              checked={attested}
+              disabled={missing > 0 || judgmentPending.length > 0 || unresolvedCritical.length > 0}
+              onChange={(e) => setAttested(e.target.checked)}
+            />
+            <span>I attest this prior authorization is clinically accurate.</span>
+          </label>
+          <button className="btn btn-primary" data-testid="approve-sign" disabled={!canSign} onClick={onSign}>
+            Approve &amp; Sign
+          </button>
+        </>
+      ) : (
+        <button className="btn btn-primary" data-testid="submit-btn" onClick={onSubmit}>
+          Submit prior authorization
+        </button>
+      )}
+
+      {auditLog.length > 0 && (
+        <div className="audit" data-testid="audit-log">
+          <p className="muted">Audit trail</p>
+          {auditLog.map((a, i) => (
+            <div className="audit-row" key={i}>
+              <span>{a.attestation}</span>
+              <span className="muted">{a.hash}{a.confirmationId ? ` · ${a.confirmationId}` : ""}</span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}

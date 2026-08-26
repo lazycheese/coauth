@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="description" content="CoAuth - an agent-native prior-authorization cockpit. A clinician and an AI agent complete payer forms together via WebMCP tools, with a human signature gate." />
+    <link rel="canonical" href="https://coauth.vercel.app/" />
+    <link rel="alternate" type="text/markdown" href="/index.md" title="Markdown" />
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="CoAuth - agent-native prior authorization" />
+    <meta property="og:description" content="A clinician and an AI agent complete a health-insurance prior authorization together via WebMCP tools, with a human signature gate." />
+    <meta property="og:url" content="https://coauth.vercel.app/" />
+    <meta property="og:image" content="https://coauth.vercel.app/og.svg" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%230e1b2e'/%3E%3Ctext x='16' y='22' font-size='18' text-anchor='middle' fill='%236ea8ff' font-family='system-ui'%3E%E2%97%88%3C/text%3E%3C/svg%3E" />
+    <title>CoAuth - Prior Authorization Cockpit</title>
+    <script type="application/ld+json">
+    {
+      "@context": "https://schema.org",
+      "@type": "SoftwareApplication",
+      "name": "CoAuth",
+      "url": "https://coauth.vercel.app/",
+      "applicationCategory": "HealthApplication",
+      "description": "Agent-native prior-authorization cockpit. A clinician and an AI agent complete a health-insurance prior authorization together on one live page using the WebMCP standard.",
+      "operatingSystem": "Web",
+      "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" },
+      "featureList": [
+        "12 WebMCP tools (document.modelContext / navigator.modelContext)",
+        "Human-gated submission - the agent cannot submit without a clinician signature",
+        "Denial-risk scoring and clinical conflict detection",
+        "Agent-drafted medical necessity and appeal letters (clinician-approved)"
+      ]
+    }
+    </script>
+    <script type="application/ld+json">
+    {
+      "@context": "https://schema.org",
+      "@type": "Organization",
+      "name": "CoAuth",
+      "alternateName": "CoAuth Prior Authorization",
+      "url": "https://coauth.vercel.app/",
+      "sameAs": ["https://github.com/lazycheese/coauth"],
+      "description": "Agent-native prior-authorization tooling built on the WebMCP standard.",
+      "contactPoint": {
+        "@type": "ContactPoint",
+        "contactType": "technical support",
+        "email": "support@coauth.vercel.app",
+        "url": "https://github.com/lazycheese/coauth/issues"
+      },
+      "address": {
+        "@type": "PostalAddress",
+        "addressLocality": "Remote",
+        "addressCountry": "US"
+      }
+    }
+    </script>
+  </head>
+  <body>
+    <div id="root">
+      <!-- Static fallback for agents and no-JS clients. Replaced by the React app when JS runs. -->
+      <main style="max-width:720px;margin:40px auto;padding:0 20px;font-family:system-ui,sans-serif;line-height:1.6">
+        <h1>CoAuth - agent-native prior authorization</h1>
+        <p>CoAuth lets a clinician and an AI agent complete a health-insurance
+          <strong>prior authorization</strong> together on one live page, using the
+          <a href="https://github.com/webmachinelearning/webmcp">WebMCP</a> standard. The agent
+          fills and checks the payer form via typed tools; the clinician keeps clinical judgment
+          and the legally required signature.</p>
+        <p>Up to <strong>82% of denied prior authorizations are overturned on appeal</strong> -
+          they were never clinically wrong, just mis-filed. CoAuth fixes the filing and keeps the
+          human in charge.</p>
+        <h2>WebMCP tools exposed by this page</h2>
+        <ul>
+          <li><code>get_workflow_guidance</code> - recommended sequence and safety rules</li>
+          <li><code>load_patient_context</code>, <code>check_payer_rules</code> - read the record and payer policy</li>
+          <li><code>fill_field</code>, <code>attach_evidence</code> - complete the form (typed, sourced)</li>
+          <li><code>validate_submission</code>, <code>assess_denial_risk</code>, <code>detect_conflicts</code> - checks</li>
+          <li><code>draft_field</code>, <code>draft_appeal</code> - agent proposes, clinician approves</li>
+          <li><code>submit</code> - <strong>human-gated</strong>; blocked until the clinician signs</li>
+        </ul>
+        <p>Developers: <a href="/developers">API docs &amp; quickstart</a> ·
+           <a href="/openapi.json">OpenAPI</a> ·
+           <a href="/.well-known/mcp">MCP</a> ·
+           <a href="/AGENTS.md">/AGENTS.md</a> ·
+           <a href="/llms.txt">/llms.txt</a> ·
+           <a href="/about">About</a> ·
+           <a href="/contact">Contact</a> ·
+           <a href="/privacy">Privacy</a> ·
+           <a href="/terms">Terms</a> ·
+           <a href="https://github.com/lazycheese/coauth">source</a>.</p>
+        <p>Open in ChatGPT's browser or Chrome 149+ with WebMCP enabled to drive it with your own
+           prompts.</p>
+      </main>
+    </div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

@@ -1,0 +1,16 @@
+*.md
+!README.md
+!AGENTS.md
+!public/AGENTS.md
+docs/
+node_modules/
+dist/
+.vercel/
+.env*
+
+.playwright-mcp/
+*.tsbuildinfo
+coauth-*.png
+
+.vercel
+.env*

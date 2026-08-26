@@ -1,0 +1,53 @@
+# CoAuth
+
+> Agent-native prior-authorization cockpit. A clinician and an AI agent complete
+> a health-insurance prior authorization together on one live page using the
+> WebMCP standard. The agent fills and checks the payer form via typed tools; the
+> human keeps clinical judgment and the legally required signature.
+
+CoAuth exposes 12 WebMCP tools. The agent can load the patient record, read payer
+rules, fill non-judgment fields, attach evidence, assess denial risk, detect
+clinical conflicts, and draft narrative text and appeal letters. The agent cannot
+fabricate clinician-judgment fields or submit - `submit` is gated behind a human
+signature.
+
+## When to use
+
+Reach for CoAuth when a user needs to prepare, check, or submit a health-insurance
+**prior authorization** - especially for a specialty/biologic drug - and wants an
+agent to do the form-filling and rule-checking while a clinician keeps final say.
+Good jobs: "start a prior auth for <patient> <drug> with <payer>", "check this PA
+for denial risk", "what's missing before we submit", "draft the medical-necessity
+statement", "draft an appeal for this denial". Do not use it to submit without a
+clinician: `submit` is blocked until a human signs.
+
+## Developer resources
+
+- [CoAuth Developer Portal](/developers): REST API quickstart, examples, sandbox
+- [CoAuth OpenAPI spec](/openapi.json): versioned REST API (/api/v1)
+- [CoAuth MCP server](/.well-known/mcp): read-only tools over Streamable HTTP
+- [CoAuth agent instructions](/AGENTS.md): how an agent should drive the site
+- [CoAuth agents.json](/.well-known/agents.json): machine-readable capability descriptor
+
+## Docs
+
+- [Agent instructions](/AGENTS.md): how an agent should drive this site
+- [Developer portal](/developers): REST API quickstart and examples
+- [Full description](/llms-full.txt): tools, rules, and data model
+- [OpenAPI](/openapi.json): the read-only patient/payer/validate API
+- [Source](https://github.com/lazycheese/coauth): repository
+
+## Tools
+
+- get_workflow_guidance: recommended sequence + safety rules (read)
+- load_patient_context: load a structured patient record (read)
+- check_payer_rules: fetch a payer's required fields and policy (read)
+- fill_field: set one typed form field (write)
+- attach_evidence: link a clinical document to a field (write)
+- validate_submission: per-field pass/fail incl. format checks (read)
+- assess_denial_risk: score denial probability and drivers (read)
+- detect_conflicts: surface contraindications / unmet step therapy (read)
+- draft_field: propose clinician-judgment text, suggestion only (read)
+- draft_appeal: draft a grounded payer appeal letter (read)
+- flag_for_human: mark a field as needing clinician input (write)
+- submit: submit the prior authorization - blocked until the clinician signs

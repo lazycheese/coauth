@@ -1,0 +1,63 @@
+# CoAuth - full description
+
+CoAuth is an agent-native prior-authorization (PA) cockpit built for the OpenAI
+WebMCP Challenge. A clinician (human) and an AI agent complete a health-insurance
+prior authorization together on one live page. The agent does the tedious,
+error-prone filling and rule-checking at machine speed by calling typed WebMCP
+tools; the clinician owns clinical judgment and the legally required signature.
+
+## The problem
+
+Up to 82% of denied prior authorizations are overturned on appeal - they were
+never clinically wrong, just mis-filed (incomplete submissions, format errors,
+unclear payer requirements). Browser agents that scrape the DOM make this worse,
+and this domain legally requires a human in the loop. CoAuth turns the payer form
+into typed tools and enforces the human gate in software.
+
+## Human + agent division of labor
+
+The agent CAN:
+- load the patient's structured record
+- read the payer's required fields and coverage policy
+- fill every required field that is not a clinician-judgment field
+- attach clinical evidence documents
+- validate the submission (presence + format: NPI = 10 digits, ICD-10, HCPCS)
+- assess denial risk and list the contributing factors
+- detect clinical conflicts (e.g. positive TB screen contraindicating a biologic,
+  or step therapy under the required duration)
+- draft the medical-necessity narrative and a payer appeal letter as suggestions
+
+The agent CANNOT:
+- fill or fabricate a clinician-judgment field
+- resolve a critical clinical conflict (the clinician records the override)
+- submit - submit() returns "blocked" until the clinician signs and attests
+
+## Tools and shapes
+
+- get_workflow_guidance() -> { recommendedSequence, rules, safety }
+- load_patient_context({ patientId: "jane-doe" | "marcus-lee" })
+- check_payer_rules({ payer: "uhc" | "aetna" | "cigna" })
+- fill_field({ fieldId, value })
+- attach_evidence({ fieldId, docId })
+- validate_submission() -> { failCount, invalidCount, judgmentCount, clearForSignature }
+- assess_denial_risk() -> { score, band, factors }
+- detect_conflicts() -> { conflicts, requiresHumanOverride }
+- draft_field({ fieldId }) -> suggestion (clinician must accept)
+- draft_appeal() -> appeal letter (clinician must review & sign)
+- flag_for_human({ fieldId, reason })
+- submit() -> { status: "submitted" | "blocked", confirmationId? }
+
+## Data
+
+Demo drug: Humira (adalimumab), HCPCS J0135. Payers: UnitedHealthcare, Aetna,
+Cigna. Patients: Jane Doe (rheumatoid arthritis, clean case) and Marcus Lee
+(psoriatic arthritis, positive TB screen + short DMARD trial - a denial-risk
+case that trips a contraindication conflict requiring a clinician override).
+
+## Safety
+
+WebMCP tools are registered on both document.modelContext and
+navigator.modelContext. Write tools change page state; submit is human-gated and
+cannot run without a clinician signature. Agent-filled fields display their
+provenance (which record field they were sourced from) so the values are
+auditable and not hallucinated.

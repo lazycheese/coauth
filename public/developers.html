@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Developers · CoAuth</title>
+    <link rel="canonical" href="https://coauth.vercel.app/developers.html" />
+    <meta name="description" content="CoAuth developer portal - WebMCP tools, the read-only REST API, OpenAPI spec, and quickstart examples." />
+    <style>body{font-family:system-ui,sans-serif;max-width:760px;margin:40px auto;padding:0 20px;line-height:1.6;color:#16202c}a{color:#1f5fff}h1{margin-bottom:4px}code,pre{background:#f4f7fc;border-radius:6px}pre{padding:12px;overflow:auto}code{padding:1px 5px}</style>
+  </head>
+  <body>
+    <h1>CoAuth developer portal</h1>
+    <p><a href="/">Home</a> · <a href="/openapi.json">OpenAPI</a> · <a href="/AGENTS.md">Agent instructions</a> · <a href="/about">About</a> · <a href="/contact">Contact</a> · <a href="/terms">Terms</a></p>
+
+    <h2>Two ways to integrate</h2>
+    <p><strong>1. WebMCP tools (primary).</strong> Open the site in an agentic
+      browser (ChatGPT's browser, or Chrome 149+ with WebMCP enabled). The page
+      registers 12 tools on <code>document.modelContext</code> and
+      <code>navigator.modelContext</code>. Call <code>get_workflow_guidance</code>
+      first to learn the sequence and safety rules. Full tool list:
+      <a href="/llms-full.txt">/llms-full.txt</a>.</p>
+
+    <p><strong>2. Read-only REST API.</strong> The seed data behind the cockpit is
+      also exposed as a small REST API, described by
+      <a href="/openapi.json">/openapi.json</a>. No authentication is required;
+      the endpoints are read-only and return fictional demo data.</p>
+
+    <h2>Quickstart (REST, versioned)</h2>
+    <pre><code># Fetch a patient record
+curl https://coauth.vercel.app/api/v1/patient/jane-doe
+
+# Fetch a payer's required fields and policy
+curl "https://coauth.vercel.app/api/v1/payer-rules?payer=uhc"
+
+# Validate a submission
+curl -X POST https://coauth.vercel.app/api/v1/validate \
+  -H "content-type: application/json" \
+  -d '{"payer":"uhc","formFields":{"member_id":"UHC-88213"}}'</code></pre>
+    <p>The unversioned <code>/api/*</code> paths still work as deprecated aliases
+      and send <code>Deprecation</code>, <code>Sunset</code>, and
+      <code>Link: rel="successor-version"</code> headers.</p>
+
+    <h2>MCP server</h2>
+    <p>A read-only Model Context Protocol server is available over Streamable
+      HTTP at <code>/.well-known/mcp</code>, exposing <code>get_patient</code>,
+      <code>get_payer_rules</code>, and <code>validate_submission</code>:</p>
+    <pre><code>curl -X POST https://coauth.vercel.app/.well-known/mcp \
+  -H "content-type: application/json" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'</code></pre>
+
+    <h2>Sandbox</h2>
+    <p>Every endpoint above is a live, no-cost sandbox: it serves fictional demo
+      data only, so you can call it freely without side effects. There is nothing
+      to reset and no rate-limited quota to exhaust. Copy any command into your
+      terminal to try it now.</p>
+
+    <h2>Authentication</h2>
+    <p>None. All endpoints are public and read-only. There are no API keys, no
+      OAuth, and no rate-limited private tiers. Standard <code>RateLimit</code>
+      response headers advertise a courtesy limit so agents can self-throttle.</p>
+
+    <h2>Errors</h2>
+    <p>Errors are returned as JSON with a stable shape:
+      <code>{ "error": { "code", "message", "hint" } }</code> and the appropriate
+      HTTP status (400 or 404). Unknown <code>/api/*</code> paths return a JSON
+      404, never an HTML page.</p>
+
+    <h2>Versioning</h2>
+    <p>The API is versioned <code>1.0.0</code> in the OpenAPI <code>info</code>
+      block. Breaking changes will ship under a new path prefix and be announced
+      via a <code>Deprecation</code> / <code>Sunset</code> header on the old
+      routes.</p>
+  </body>
+</html>

@@ -1,0 +1,340 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "CoAuth API",
+    "version": "1.0.0",
+    "description": "Read-only endpoints backing the CoAuth prior-authorization cockpit. The primary agent interface is WebMCP tools registered in-page; these endpoints serve the seeded patient, payer, and validation data. No authentication is required. Errors are returned as JSON with a stable { error: { code, message, hint } } shape. The API is versioned in this info block; breaking changes will ship under a new path prefix with Deprecation/Sunset headers on the old routes. Canonical routes are versioned under /api/v1. The unversioned /api/* routes remain as deprecated aliases and send Deprecation + Sunset + Link (successor-version) headers.",
+    "license": {
+      "name": "MIT",
+      "url": "https://github.com/lazycheese/coauth/blob/main/LICENSE"
+    },
+    "contact": {
+      "name": "CoAuth",
+      "url": "https://github.com/lazycheese/coauth/issues"
+    }
+  },
+  "servers": [
+    {
+      "url": "https://coauth.vercel.app",
+      "description": "Production"
+    }
+  ],
+  "paths": {
+    "/api/v1/patient/{id}": {
+      "get": {
+        "operationId": "getPatient",
+        "summary": "Get a patient record",
+        "description": "Return the seeded clinical record for a patient id.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "Patient id.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "jane-doe",
+                "marcus-lee"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Patient record",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Patient"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Patient not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/payer-rules": {
+      "get": {
+        "operationId": "getPayerRules",
+        "summary": "Get a payer's required fields and policy",
+        "description": "Return the required fields and coverage policy for a payer.",
+        "parameters": [
+          {
+            "name": "payer",
+            "in": "query",
+            "required": true,
+            "description": "Payer id.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "uhc",
+                "aetna",
+                "cigna"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Payer rules",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PayerRules"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Payer not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/validate": {
+      "post": {
+        "operationId": "validateSubmission",
+        "summary": "Validate a submission against a payer's rules",
+        "description": "Run the rules engine over a set of form fields and return a per-field pass/fail summary.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "payer": {
+                    "type": "string",
+                    "enum": [
+                      "uhc",
+                      "aetna",
+                      "cigna"
+                    ]
+                  },
+                  "formFields": {
+                    "type": "object",
+                    "additionalProperties": true
+                  }
+                },
+                "required": [
+                  "payer",
+                  "formFields"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Validation summary",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ValidationSummary"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid payer",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "Error": {
+        "type": "object",
+        "description": "Stable JSON error envelope.",
+        "properties": {
+          "error": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string",
+                "description": "Machine-readable error code."
+              },
+              "message": {
+                "type": "string",
+                "description": "Human-readable description."
+              },
+              "hint": {
+                "type": "string",
+                "description": "How to resolve the error."
+              }
+            },
+            "required": [
+              "code",
+              "message"
+            ]
+          }
+        },
+        "required": [
+          "error"
+        ]
+      },
+      "Patient": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "dob": {
+            "type": "string",
+            "format": "date"
+          },
+          "memberId": {
+            "type": "string"
+          },
+          "diagnoses": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "code": {
+                  "type": "string"
+                },
+                "label": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "medsTried": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          },
+          "labs": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          },
+          "clinical": {
+            "type": "object"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "memberId",
+          "diagnoses"
+        ]
+      },
+      "FieldDef": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "label": {
+            "type": "string"
+          },
+          "type": {
+            "type": "string"
+          },
+          "requiresHumanJudgment": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "id",
+          "label",
+          "type"
+        ]
+      },
+      "PayerRules": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "drug": {
+            "type": "string"
+          },
+          "policy": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "requiredFields": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/FieldDef"
+            }
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "requiredFields"
+        ]
+      },
+      "ValidationSummary": {
+        "type": "object",
+        "properties": {
+          "failCount": {
+            "type": "integer"
+          },
+          "invalidCount": {
+            "type": "integer"
+          },
+          "judgmentCount": {
+            "type": "integer"
+          },
+          "passCount": {
+            "type": "integer"
+          },
+          "clearForSignature": {
+            "type": "boolean"
+          },
+          "results": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          }
+        },
+        "required": [
+          "failCount",
+          "clearForSignature"
+        ]
+      }
+    }
+  }
+}

@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>About · CoAuth</title>
+    <link rel="canonical" href="https://coauth.vercel.app/about" />
+    <meta name="description" content="About CoAuth - an agent-native prior-authorization cockpit built on the WebMCP standard." />
+    <style>body{font-family:system-ui,sans-serif;max-width:720px;margin:40px auto;padding:0 20px;line-height:1.6;color:#16202c}a{color:#1f5fff}h1{margin-bottom:4px}</style>
+  </head>
+  <body>
+    <h1>About CoAuth</h1>
+    <p><a href="/">Home</a> · <a href="/developers">Developers</a> · <a href="/contact">Contact</a> · <a href="/privacy">Privacy</a> · <a href="/terms">Terms</a></p>
+    <p>CoAuth is an agent-native prior-authorization cockpit. It lets a clinician
+      and an AI agent complete a health-insurance prior authorization together on
+      one live page, using the <a href="https://github.com/webmachinelearning/webmcp">WebMCP</a>
+      standard. Instead of an AI agent scraping the page and guessing where to
+      click, CoAuth exposes the payer form as typed tools that the agent calls
+      directly - filling fields, attaching evidence, scoring denial risk, and
+      detecting clinical conflicts at machine speed.</p>
+    <p>The human stays firmly in control. The agent cannot fabricate
+      clinician-judgment fields, cannot resolve a critical clinical
+      contraindication, and cannot submit. Submission is architecturally gated
+      behind a clinician signature: the <code>submit</code> tool returns a
+      "blocked" status until a human reviews the work, attests to its accuracy,
+      and signs. This mirrors the legal reality that high-stakes clinical
+      decisions require accountable human oversight.</p>
+    <p>Why it matters: up to 82% of denied prior authorizations are overturned on
+      appeal. The clinical decision was rarely wrong - the paperwork was. CoAuth
+      fixes the filing so patients get care sooner, while keeping a licensed
+      human accountable for every submission. It was built for the OpenAI WebMCP
+      Challenge as a demonstration of genuine human + agent collaboration on a
+      real, high-stakes workflow.</p>
+    <p>The project is open source under the MIT license. See the
+      <a href="https://github.com/lazycheese/coauth">source repository</a> for the
+      full implementation, including the 12 WebMCP tools, the denial-risk engine,
+      and the conflict-detection rules.</p>
+  </body>
+</html>

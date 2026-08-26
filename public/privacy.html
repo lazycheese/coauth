@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Privacy · CoAuth</title>
+    <link rel="canonical" href="https://coauth.vercel.app/privacy" />
+    <meta name="description" content="CoAuth privacy notice - no real patient data, no accounts, no tracking." />
+    <style>body{font-family:system-ui,sans-serif;max-width:720px;margin:40px auto;padding:0 20px;line-height:1.6;color:#16202c}a{color:#1f5fff}h1{margin-bottom:4px}</style>
+  </head>
+  <body>
+    <h1>Privacy notice</h1>
+    <p><a href="/">Home</a> · <a href="/about">About</a> · <a href="/developers">Developers</a> · <a href="/contact">Contact</a> · <a href="/terms">Terms</a></p>
+    <p>CoAuth is a demonstration application. It contains <strong>no real patient
+      data</strong>. Every patient, payer, and clinical record in the app is
+      fictional seed data created solely to demonstrate the WebMCP tool workflow.
+      Any resemblance to a real person is coincidental.</p>
+    <p><strong>No accounts, no sign-in.</strong> CoAuth does not ask for or store
+      credentials. There is no login, and no personal information is collected
+      from visitors.</p>
+    <p><strong>No server-side storage of your activity.</strong> The application
+      state - the prior authorization you build in the browser - lives entirely
+      in your browser's memory. A short history of submissions is stored in your
+      browser's <code>localStorage</code> on your own device only; it is never
+      transmitted to a server and never shared with anyone. Clearing your browser
+      data removes it.</p>
+    <p><strong>No third-party tracking or analytics.</strong> CoAuth loads no
+      advertising, no analytics scripts, and no external trackers. The read-only
+      API endpoints (<code>/api/patient</code>, <code>/api/payer-rules</code>,
+      <code>/api/validate</code>) only return fictional seed data and do not log
+      request contents for identification.</p>
+    <p>Because the project is open source under the MIT license, you can verify
+      all of the above in the <a href="https://github.com/lazycheese/coauth">source
+      repository</a>. Questions? See <a href="/contact">Contact</a>.</p>
+  </body>
+</html>

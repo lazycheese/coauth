@@ -1,0 +1,52 @@
+{
+  "schemaVersion": "1.0",
+  "name": "CoAuth",
+  "description": "Agent-native prior-authorization cockpit. Exposes WebMCP tools so an AI agent can complete a health-insurance prior authorization together with a human clinician.",
+  "url": "https://coauth.vercel.app",
+  "instructions": "https://coauth.vercel.app/AGENTS.md",
+  "whenToUse": {
+    "summary": "Use CoAuth when a user needs to prepare, check, or submit a health-insurance prior authorization (especially for a specialty/biologic drug) with a clinician kept in the loop.",
+    "bestFor": [
+      "Start a prior authorization for a patient, drug, and payer",
+      "Check a prior authorization for denial risk before submitting",
+      "Find what is missing or malformed in a prior authorization",
+      "Draft a medical-necessity statement grounded in the chart",
+      "Draft an appeal letter for a denied prior authorization"
+    ],
+    "notFor": [
+      "Submitting without a clinician - submit is blocked until a human signs",
+      "Fabricating clinician-judgment fields or overriding contraindications"
+    ],
+    "howToCall": "Open the page in an agentic browser and call the WebMCP tools starting with get_workflow_guidance, or call the read-only MCP server for data tools."
+  },
+  "protocols": {
+    "mcp": {
+      "transport": "streamable-http",
+      "endpoint": "https://coauth.vercel.app/.well-known/mcp",
+      "tools": ["get_patient", "get_payer_rules", "validate_submission"]
+    },
+    "webmcp": {
+      "registration": ["document.modelContext", "navigator.modelContext"],
+      "tools": [
+        "get_workflow_guidance",
+        "load_patient_context",
+        "check_payer_rules",
+        "fill_field",
+        "attach_evidence",
+        "validate_submission",
+        "assess_denial_risk",
+        "detect_conflicts",
+        "draft_field",
+        "draft_appeal",
+        "flag_for_human",
+        "submit"
+      ]
+    }
+  },
+  "safety": {
+    "humanGatedTools": ["submit"],
+    "notes": "submit is blocked until a human clinician signs. Agents must not fabricate clinician-judgment fields or resolve critical clinical conflicts."
+  },
+  "openapi": "https://coauth.vercel.app/openapi.json",
+  "contact": "https://github.com/lazycheese/coauth"
+}

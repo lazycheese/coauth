@@ -41,12 +41,32 @@ curl -X POST https://coauth.vercel.app/api/v1/validate \
       <code>Link: rel="successor-version"</code> headers.</p>
 
     <h2>MCP server</h2>
-    <p>A read-only Model Context Protocol server is available over Streamable
-      HTTP at <code>/.well-known/mcp</code>, exposing <code>get_patient</code>,
-      <code>get_payer_rules</code>, and <code>validate_submission</code>:</p>
+    <p>A Model Context Protocol server is available over Streamable HTTP at
+      <code>/.well-known/mcp</code> (protocol 2025-06-18, with 2025-03-26
+      accepted). It exposes <code>get_patient</code>,
+      <code>get_payer_rules</code> and <code>validate_submission</code>.</p>
+    <p><strong>Why this is a smaller set than the in-page tools.</strong> The
+      thirteen WebMCP tools act on a live workspace that exists only in the
+      browser: filling a field, accepting a draft or signing changes what the
+      clinician is looking at. A stateless HTTP server has no such workspace, so
+      it offers the three operations that are meaningful without one. Submission
+      always requires a clinician signature and is never available over MCP.</p>
     <pre><code>curl -X POST https://coauth.vercel.app/.well-known/mcp \
   -H "content-type: application/json" \
   -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'</code></pre>
+
+    <h2>Verifying the gate yourself</h2>
+    <p>The approval gate is the claim worth checking, so check it. Sign a
+      submission, then try to submit a different one with the same approval:</p>
+    <pre><code># mint an approval for one exact submission
+curl -X POST https://coauth.vercel.app/api/v1/sign   -H "content-type: application/json"   -d '{"payer":"uhc","formFields":{"member_id":"UHC-88213","dose":"40 mg"},
+       "attestation":"I attest.","signer":"Your Name"}'
+
+# submitting with no approval at all
+curl -X POST https://coauth.vercel.app/api/v1/submit   -H "content-type: application/json"   -d '{"payer":"uhc","formFields":{"member_id":"UHC-88213","dose":"40 mg"}}'
+# -> approval_required</code></pre>
+    <p>The repository ships the full set as <code>npm run verify</code>, which
+      also runs it against a browser.</p>
 
     <h2>Sandbox</h2>
     <p>Every endpoint above is a live, no-cost sandbox: it serves fictional demo
@@ -54,10 +74,11 @@ curl -X POST https://coauth.vercel.app/api/v1/validate \
       to reset and no rate-limited quota to exhaust. Copy any command into your
       terminal to try it now.</p>
 
-    <h2>Authentication</h2>
-    <p>None. All endpoints are public and read-only. There are no API keys, no
-      OAuth, and no rate-limited private tiers. Standard <code>RateLimit</code>
-      response headers advertise a courtesy limit so agents can self-throttle.</p>
+    <h2>Authentication and limits</h2>
+    <p>None. All endpoints are public and read-only. There are no API keys and no
+      OAuth. There is also no rate limiting: this deployment has no shared store
+      to count requests in, so rather than advertise a limit it cannot enforce,
+      it advertises none. Please be considerate with automated traffic.</p>
 
     <h2>Errors</h2>
     <p>Errors are returned as JSON with a stable shape:

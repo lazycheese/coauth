@@ -329,3 +329,18 @@ body {
 .audit-verify { font-size: 10px; text-transform: uppercase; letter-spacing: .03em; font-weight: 700; }
 .verify-server { color: #1c7a37; }
 .verify-client-only { color: #b7791f; }
+
+/* ---- Untrusted document marker ---- */
+.doc-flag { display: block; margin-top: 3px; font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .03em; color: #99610f; }
+
+/* ---- Measured comparison ---- */
+.cmp-progress { font-size: 13px; color: var(--muted); padding: 10px 0; font-variant-numeric: tabular-nums; }
+.cmp-explain { font-size: 12px; line-height: 1.6; margin: 12px 0 0; }
+.cmp-metrics { display: flex; flex-direction: column; gap: 2px; margin-top: 8px; }
+.cmp-metric-row { display: grid; grid-template-columns: 1.4fr 1fr 1fr; gap: 10px; align-items: baseline; padding: 8px 10px; border-radius: 4px; font-size: 13px; }
+.cmp-metric-row:nth-child(odd) { background: #f6f8fb; }
+.cmp-metric-head { font-size: 11px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); }
+.cmp-metric-head b { color: var(--ink); }
+.cmp-metric-label { color: var(--muted); }
+.cmp-metric-row .bad { color: #c0341d; }
+.cmp-metric-row .good { color: #1c7a37; }

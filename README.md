@@ -63,6 +63,28 @@ with your own prompts, e.g. *"Start a prior auth for Marcus Lee's Humira request
 with Aetna."* Or click **▶ Watch demo** to run the full narrative autonomously,
 or press **⌘K / Ctrl-K** for the tool command palette.
 
+## Verifying it
+
+The claims this project makes are claims about the deployed system, so they are
+checked against a running one rather than against stubs:
+
+```bash
+npm run verify                                    # a local dev server
+npm run verify -- --url https://coauth.vercel.app # a deployment
+```
+
+The script drives the product over HTTP and through a real browser. It attempts
+to submit without a signature, with a forged approval, with a form edited after
+signing, with an approval already used, and with one replayed at a different
+payer; it checks the MCP endpoint against the Streamable HTTP spec; it confirms
+the approval UI cannot be framed; and it clicks through the whole walkthrough,
+confirming that production ships no inspection handle, that a document carrying
+instruction-like text is flagged, and that the tool path never writes to a
+clinician-only field.
+
+Browser checks need a browser: `npx playwright install chromium`. Without one
+they are skipped and the HTTP checks still run.
+
 ## Stack
 
 Vite · React · TypeScript · Zustand · Vercel (static + edge functions) · WebMCP.

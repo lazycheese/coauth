@@ -1,4 +1,5 @@
 import { useCoAuth } from "../store/coauthStore";
+import { scanUntrusted } from "../rules/untrusted";
 import { HistoryPanel } from "./HistoryPanel";
 
 export function PatientPanel() {
@@ -47,6 +48,11 @@ export function PatientPanel() {
         {docs.map((d) => (
           <button key={d.id} className="doc" data-testid={`doc-${d.id}`} disabled={!focusedField} onClick={() => onAttach(d.id)}>
             {d.label}
+            {!scanUntrusted(d.content).clean && (
+              <span className="doc-flag" data-testid={`doc-flag-${d.id}`}>
+                contains instruction-like text, treated as data
+              </span>
+            )}
           </button>
         ))}
       </div>

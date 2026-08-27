@@ -1,58 +1,52 @@
 import { useState } from "react";
+import { useCoAuth } from "../store/coauthStore";
+import { humanActions } from "../app/actions";
+import { runBaseline, runToolPath, type RunMetrics } from "../demo/baseline";
 
-interface Step { t: string; label: string; kind: "info" | "warn" | "error" | "ok"; }
+type Phase = "idle" | "running" | "done";
 
-const BASELINE: Step[] = [
-  { t: "0.0s", label: "Snapshotting DOM - 312 nodes, 41 inputs", kind: "info" },
-  { t: "1.4s", label: "Locating “Member ID” by label proximity…", kind: "info" },
-  { t: "3.1s", label: "Filled Diagnosis = “Rheumatoid arthritis” (expected ICD-10 code)", kind: "warn" },
-  { t: "6.8s", label: "Cookie/consent modal intercepted click", kind: "warn" },
-  { t: "9.2s", label: "Re-reading DOM after layout shift…", kind: "info" },
-  { t: "14.0s", label: "Session-timeout dialog - unhandled", kind: "error" },
-  { t: "19.5s", label: "Submitted to a “thank you” page - read as success", kind: "warn" },
-  { t: "23 steps", label: "Gave up · 2 errors · no conflict check · high denial risk", kind: "error" },
-];
-
-const COAUTH: Step[] = [
-  { t: "0.0s", label: "load_patient_context: structured record", kind: "ok" },
-  { t: "0.4s", label: "check_payer_rules: 9 typed fields", kind: "ok" },
-  { t: "1.1s", label: "fill_field x6: ICD-10, HCPCS, dose, step therapy", kind: "ok" },
-  { t: "1.9s", label: "detect_conflicts: caught TB contraindication", kind: "ok" },
-  { t: "2.3s", label: "assess_denial_risk: 46%, flagged for clinician", kind: "ok" },
-  { t: "2.6s", label: "submit: blocked, awaiting clinician signature", kind: "warn" },
-  { t: "9 calls", label: "0 errors, conflict caught, human-gated, audit-logged", kind: "ok" },
-];
-
-function Column({ title, tag, steps, shown, accent }: { title: string; tag: string; steps: Step[]; shown: number; accent: string }) {
+function MetricRow({ label, a, b, better }: { label: string; a: string; b: string; better: "low" | "high" | "none" }) {
+  // "better" only drives colour; the values themselves are measured.
   return (
-    <div className={`cmp-col cmp-${accent}`}>
-      <div className="cmp-col-head">
-        <strong>{title}</strong>
-        <span className="cmp-tag">{tag}</span>
-      </div>
-      <div className="cmp-steps">
-        {steps.slice(0, shown).map((s, i) => (
-          <div key={i} className={`cmp-step kind-${s.kind}`}>
-            <span className="cmp-t">{s.t}</span>
-            <span>{s.label}</span>
-          </div>
-        ))}
-      </div>
+    <div className="cmp-metric-row">
+      <span className="cmp-metric-label">{label}</span>
+      <b className={better === "none" ? "" : "bad"}>{a}</b>
+      <b className={better === "none" ? "" : "good"}>{b}</b>
     </div>
   );
 }
 
 export function Compare({ onClose }: { onClose: () => void }) {
-  const [b, setB] = useState(0);
-  const [c, setC] = useState(0);
-  const [running, setRunning] = useState(false);
-  const [done, setDone] = useState(false);
+  const reset = useCoAuth((s) => s.reset);
+  const [phase, setPhase] = useState<Phase>("idle");
+  const [step, setStep] = useState<string>("");
+  const [baseline, setBaseline] = useState<RunMetrics | null>(null);
+  const [tools, setTools] = useState<RunMetrics | null>(null);
 
-  const run = () => {
-    setB(0); setC(0); setDone(false); setRunning(true);
-    let bi = 0, ci = 0;
-    const bt = setInterval(() => { bi++; setB(bi); if (bi >= BASELINE.length) clearInterval(bt); }, 620);
-    const ct = setInterval(() => { ci++; setC(ci); if (ci >= COAUTH.length) { clearInterval(ct); setRunning(false); setDone(true); } }, 430);
+  const run = async () => {
+    setPhase("running");
+    setBaseline(null);
+    setTools(null);
+
+    // Same patient, same payer, same form, one run each.
+    const setup = async () => {
+      reset();
+      await humanActions.loadPatient("marcus-lee");
+      await humanActions.choosePayer("aetna");
+    };
+
+    await setup();
+    setStep("Running the DOM-driven baseline");
+    const b = await runBaseline((s) => setStep(`Baseline: ${s}`));
+    setBaseline(b);
+
+    await setup();
+    setStep("Running the same task through the tools");
+    const t = await runToolPath((s) => setStep(`Tools: ${s}`));
+    setTools(t);
+
+    setStep("");
+    setPhase("done");
   };
 
   return (
@@ -60,27 +54,54 @@ export function Compare({ onClose }: { onClose: () => void }) {
       <div className="cmp-modal">
         <div className="cmp-head">
           <div>
-            <h2>Same task, two agents</h2>
-            <p className="muted">Illustrative only - the baseline steps and metrics below are <strong>not measured</strong>; they depict documented browser-agent failure modes on write-heavy forms (Web Bench, 2026). The CoAuth side reflects this app's actual tool sequence.</p>
+            <h2>Same form, with and without tools</h2>
+            <p className="muted">
+              Both runs happen in this browser when you press the button, against the same patient and payer.
+              Every number below is measured from those two runs. Nothing here is pre-written.
+            </p>
           </div>
           <div className="cmp-actions">
-            <button className="btn btn-primary" data-testid="compare-run" onClick={run} disabled={running}>{done ? "Replay" : "Run comparison"}</button>
+            <button className="btn btn-primary" data-testid="compare-run" onClick={run} disabled={phase === "running"}>
+              {phase === "running" ? "Running" : phase === "done" ? "Run again" : "Run both"}
+            </button>
             <button className="btn" onClick={onClose}>Close</button>
           </div>
         </div>
 
-        <div className="cmp-grid">
-          <Column title="Baseline agent" tag="DOM scraping · illustrative" steps={BASELINE} shown={b} accent="bad" />
-          <Column title="CoAuth" tag="WebMCP tools" steps={COAUTH} shown={c} accent="good" />
-        </div>
+        {phase === "running" && <div className="cmp-progress" data-testid="compare-progress">{step}</div>}
 
-        <div className="cmp-metrics" data-testid="compare-metrics" data-done={done ? "1" : "0"}>
-          <div className="cmp-metric"><span>Steps</span><b className="bad">23</b><b className="good">9</b></div>
-          <div className="cmp-metric"><span>Errors</span><b className="bad">2</b><b className="good">0</b></div>
-          <div className="cmp-metric"><span>Wall-clock</span><b className="bad">~48s</b><b className="good">~4s</b></div>
-          <div className="cmp-metric"><span>Conflict check</span><b className="bad">None</b><b className="good">Yes</b></div>
-          <div className="cmp-metric"><span>Outcome</span><b className="bad">Failed</b><b className="good">Clinician-ready</b></div>
-        </div>
+        {phase === "idle" && (
+          <p className="cmp-explain muted">
+            The baseline reads the rendered page and types into the controls it can find, which is all an agent
+            without tools can do. The tool path calls the typed WebMCP tools. The interesting difference is not
+            speed: it is what each one can know about the form.
+          </p>
+        )}
+
+        {baseline && tools && (
+          <>
+            <div className="cmp-metrics" data-testid="compare-metrics" data-measured="1">
+              <div className="cmp-metric-row cmp-metric-head">
+                <span />
+                <b>{baseline.label}</b>
+                <b>{tools.label}</b>
+              </div>
+              <MetricRow label="Steps taken" a={String(baseline.steps)} b={String(tools.steps)} better="low" />
+              <MetricRow label="Wall clock" a={`${(baseline.wallClockMs / 1000).toFixed(1)}s`} b={`${(tools.wallClockMs / 1000).toFixed(1)}s`} better="low" />
+              <MetricRow label="Fields left missing" a={String(baseline.fieldsMissing)} b={String(tools.fieldsMissing)} better="low" />
+              <MetricRow label="Fields filled but malformed" a={String(baseline.fieldsInvalid)} b={String(tools.fieldsInvalid)} better="low" />
+              <MetricRow label="Clinician-only fields written to" a={String(baseline.judgmentFieldsTouched)} b={String(tools.judgmentFieldsTouched)} better="low" />
+              <MetricRow label="Clinical conflicts surfaced" a={String(baseline.conflictsFound)} b={String(tools.conflictsFound)} better="high" />
+              <MetricRow label="Outcome" a={baseline.outcome} b={tools.outcome} better="none" />
+            </div>
+            <p className="cmp-explain muted">
+              The baseline is a plain implementation, not a strawman: it reads the patient panel and matches on
+              label text. It still writes the diagnosis as prose where the payer wants an ICD-10 code, because
+              nothing on the page says otherwise, and it types into clinician-judgment fields because it has no
+              way to tell them apart. The schema is what removes both problems.
+            </p>
+          </>
+        )}
       </div>
     </div>
   );

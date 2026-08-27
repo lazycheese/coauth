@@ -55,6 +55,17 @@ Cigna. Patients: Jane Doe (rheumatoid arthritis, clean case) and Marcus Lee
 (psoriatic arthritis, positive TB screen + short DMARD trial - a denial-risk
 case that trips a contraindication conflict requiring a clinician override).
 
+## Trust boundary
+
+Patient records, scanned documents and payer files are data written by other
+people, and are treated as untrusted content rather than instructions. Tools
+scan record text for material that reads as an instruction (telling the reader
+to ignore its directions, to approve without review, or to conceal something
+from the clinician) and return it under untrustedContent with a warning.
+Detection is best-effort; the guarantee is structural instead: judgment fields
+cannot be filled by a tool and submission requires a clinician signature minted
+and verified by the server, so injected text cannot reach either.
+
 ## Safety
 
 WebMCP tools are registered on both document.modelContext and

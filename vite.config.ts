@@ -9,7 +9,26 @@ function devApi(): Plugin {
       process.env.COAUTH_SIGNING_SECRET ||= "dev-only-signing-secret-not-for-production";
       server.middlewares.use(async (req, res, next) => {
         const url = new URL(req.url ?? "", "http://localhost");
-        if (!url.pathname.startsWith("/api/")) return next();
+        const isMcp = url.pathname === "/.well-known/mcp";
+        if (!url.pathname.startsWith("/api/") && !isMcp) return next();
+        if (isMcp) {
+          const mod = await server.ssrLoadModule("/api/mcp.ts");
+          let raw = "";
+          for await (const c of req) raw += c;
+          const headers: Record<string, string> = {};
+          for (const [k, v] of Object.entries(req.headers)) if (typeof v === "string") headers[k] = v;
+          const out: Response = await mod.default(
+            new Request("http://localhost" + url.pathname, {
+              method: req.method,
+              headers,
+              body: req.method === "GET" || req.method === "DELETE" ? undefined : raw || undefined,
+            })
+          );
+          res.statusCode = out.status;
+          out.headers.forEach((v, k) => res.setHeader(k, v));
+          res.end(await out.text());
+          return;
+        }
         // Treat /api/v1/* the same as the unversioned aliases locally.
         const path = url.pathname.replace("/api/v1/", "/api/");
         const h = await server.ssrLoadModule("/api/_handlers.ts");

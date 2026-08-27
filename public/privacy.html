@@ -23,12 +23,14 @@
       in your browser's memory. A short history of submissions is stored in your
       browser's <code>localStorage</code> on your own device only; it is never
       transmitted to a server and never shared with anyone. Clearing your browser
-      data removes it.</p>
+      data removes it. That history deliberately holds no patient identifiers:
+      it keeps a confirmation number, the payer, the risk score and a timestamp,
+      and nothing that would name a person.</p>
     <p><strong>No third-party tracking or analytics.</strong> CoAuth loads no
       advertising, no analytics scripts, and no external trackers. The read-only
-      API endpoints (<code>/api/patient</code>, <code>/api/payer-rules</code>,
-      <code>/api/validate</code>) only return fictional seed data and do not log
-      request contents for identification.</p>
+      API endpoints only return fictional seed data, label it as such with an
+      <code>X-Content-Classification: fictional-demo-data</code> response header,
+      and do not log request contents for identification.</p>
     <p>Because the project is open source under the MIT license, you can verify
       all of the above in the <a href="https://github.com/lazycheese/coauth">source
       repository</a>. Questions? See <a href="/contact">Contact</a>.</p>

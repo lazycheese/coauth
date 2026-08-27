@@ -2,6 +2,7 @@ import { create } from "zustand";
 import type { Patient, PayerRules, EvidenceDoc } from "../data/seed";
 import { validate, type ValidationSummary } from "../rules/validate";
 import { assessRisk, detectConflicts, type RiskAssessment, type Conflict } from "../rules/risk";
+import { postJson } from "../lib/http";
 
 export interface ActivityEntry {
   id: number;
@@ -19,6 +20,8 @@ export interface AuditEntry {
   /** "server" when the signature was minted and checked by the API. */
   verifiedBy: "server" | "client-only";
   confirmationId?: string;
+  /** Set when the submission changed after this signature was given. */
+  voided?: boolean;
 }
 
 export interface ApprovalToken {
@@ -41,21 +44,40 @@ export interface Flag {
   reason: string;
 }
 
+/** What a submission leaves behind on this device.
+ *
+ * Deliberately nothing that identifies a patient. The receipt is a confirmation
+ * id, who it went to, and what the risk was; the record itself stays on the
+ * server side of the story. Persisting a patient's name to browser storage is a
+ * habit worth not forming, and the data being fictional here does not make it a
+ * pattern worth shipping. */
 export interface SubmittedPA {
   confirmationId: string;
-  patientName: string;
   payer: string;
   riskAtSubmit: number;
   hash: string;
   ts: number;
 }
 
-const HISTORY_KEY = "coauth.history.v1";
+// Bumped from v1, which stored patient names. Old entries are discarded rather
+// than migrated, because the point is not to keep them.
+const HISTORY_KEY = "coauth.history.v2";
+const LEGACY_HISTORY_KEYS = ["coauth.history.v1"];
 
 function loadHistory(): SubmittedPA[] {
   try {
+    for (const old of LEGACY_HISTORY_KEYS) localStorage.removeItem(old);
     const raw = localStorage.getItem(HISTORY_KEY);
-    return raw ? (JSON.parse(raw) as SubmittedPA[]) : [];
+    if (!raw) return [];
+    const stored = JSON.parse(raw) as SubmittedPA[];
+    const kept = stored.filter((h) => h && !("patientName" in h));
+    // Ignoring an identifier is not the same as removing it. If anything was
+    // dropped, write the cleaned list back now rather than waiting for the next
+    // submission to overwrite it.
+    if (kept.length !== stored.length) {
+      localStorage.setItem(HISTORY_KEY, JSON.stringify(kept));
+    }
+    return kept;
   } catch {
     return [];
   }
@@ -89,6 +111,10 @@ interface CoAuthState {
   activity: ActivityEntry[];
   focusedField: string | null;
   submitResult: { status: string; reason?: string; confirmationId?: string } | null;
+  /** True when a signature was voided by a change and has not been replaced. */
+  signatureVoided: boolean;
+  /** Which scripted run, if any, is currently driving the workspace. */
+  scriptedRun: "walkthrough" | "comparison" | null;
   toast: string | null;
   webmcpConnected: boolean;
 
@@ -106,6 +132,7 @@ interface CoAuthState {
   recordSubmission: (pa: SubmittedPA) => void;
   setToast: (msg: string | null) => void;
   setWebmcpConnected: (v: boolean) => void;
+  setScriptedRun: (r: CoAuthState["scriptedRun"]) => void;
   addFlag: (fieldId: string, reason: string) => void;
   sign: (attestation: string, signer: string) => Promise<ApprovalToken>;
   clearApproval: () => void;
@@ -116,6 +143,20 @@ interface CoAuthState {
 }
 
 let activitySeq = 0;
+
+/** Changing the submission voids any signature covering it.
+ *
+ * The attestation is a statement about a specific set of values, so it cannot
+ * survive them changing. The previous entry stays in the audit trail, marked as
+ * voided, because a signature that was given and then superseded is part of the
+ * history rather than something to erase. */
+function invalidateApproval(s: CoAuthState): Partial<CoAuthState> {
+  if (!s.approvalToken) return { submitResult: null };
+  const auditLog = s.auditLog.map((e, i) =>
+    i === s.auditLog.length - 1 && !e.confirmationId ? { ...e, voided: true } : e
+  );
+  return { approvalToken: null, submitResult: null, signatureVoided: true, auditLog };
+}
 
 // Deterministic, dependency-free hash of the current form state.
 function hashFields(fields: Record<string, unknown>): string {
@@ -145,11 +186,14 @@ export const useCoAuth = create<CoAuthState>((set, get) => ({
   activity: [],
   focusedField: null,
   submitResult: null,
+  signatureVoided: false,
+  scriptedRun: null,
   toast: null,
   webmcpConnected: false,
 
   setToast: (msg) => set({ toast: msg }),
   setWebmcpConnected: (v) => set({ webmcpConnected: v }),
+  setScriptedRun: (r) => set({ scriptedRun: r }),
 
   setPatient: (p) => set({ patient: p }),
   setPayerRules: (r) => set({ payerRules: r }),
@@ -157,14 +201,16 @@ export const useCoAuth = create<CoAuthState>((set, get) => ({
 
   setField: (fieldId, value) => {
     // Editing any field invalidates a prior signature.
-    set((s) => ({ formFields: { ...s.formFields, [fieldId]: value }, approvalToken: null, submitResult: null }));
+    set((s) => ({ formFields: { ...s.formFields, [fieldId]: value }, ...invalidateApproval(s) }));
   },
 
   attach: (fieldId, docId) =>
+    // Attaching changes the submission, so it invalidates a signature for the
+    // same reason editing a field does, and clears any stale result banner.
     set((s) => ({
       attachments: { ...s.attachments, [fieldId]: docId },
       formFields: { ...s.formFields, [fieldId]: docId },
-      approvalToken: null,
+      ...invalidateApproval(s),
     })),
 
   runValidation: () => {
@@ -177,7 +223,7 @@ export const useCoAuth = create<CoAuthState>((set, get) => ({
   },
 
   resolveConflict: (id, rationale) => {
-    set((s) => ({ overrides: { ...s.overrides, [id]: rationale }, approvalToken: null, submitResult: null }));
+    set((s) => ({ overrides: { ...s.overrides, [id]: rationale }, ...invalidateApproval(s) }));
     get().runValidation();
   },
 
@@ -227,26 +273,27 @@ export const useCoAuth = create<CoAuthState>((set, get) => ({
     // Ask the signing service to mint the token. Only a server-minted token can
     // be verified at submit time, so this is what makes the gate real.
     try {
-      const res = await fetch("/api/v1/sign", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          payer: s0.payerRules?.id ?? "",
-          formFields: s0.formFields,
-          attestation,
-          signer,
-        }),
+      const res = await postJson("/api/v1/sign", {
+        payer: s0.payerRules?.id ?? "",
+        formFields: s0.formFields,
+        attestation,
+        signer,
       });
-      if (res.ok) {
-        const { token: t } = await res.json();
+      if (res.ok && res.json?.token) {
+        const t = res.json.token;
         token = { ...token, ts: t.ts, payer: t.payer, digest: t.digest, jti: t.jti, mac: t.mac, serverVerified: true };
+      } else {
+        get().setToast("The signing service did not issue an approval, so this signature is local only and cannot be submitted.");
       }
     } catch {
-      /* signing service unreachable; fall through to an advisory local token */
+      // Unreachable or too slow. The signature stays local, which submit will
+      // refuse, and the audit trail records that it was never server-verified.
+      get().setToast("The signing service could not be reached, so this signature is local only and cannot be submitted.");
     }
 
     set((s) => ({
       approvalToken: token,
+      signatureVoided: false,
       auditLog: [
         ...s.auditLog,
         {
@@ -277,6 +324,7 @@ export const useCoAuth = create<CoAuthState>((set, get) => ({
       patient: null, payerRules: null, docs: [], formFields: {}, attachments: {},
       validation: null, risk: null, conflicts: [], overrides: {}, suggestions: {}, provenance: {}, appealDraft: null, flags: [],
       approvalToken: null, auditLog: [], activity: [], focusedField: null, submitResult: null,
+      signatureVoided: false,
     }),
 }));
 

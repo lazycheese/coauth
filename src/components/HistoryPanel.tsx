@@ -9,7 +9,7 @@ export function HistoryPanel() {
       {history.slice(0, 6).map((h) => (
         <div className="history-row" key={h.confirmationId}>
           <span className="history-id">{h.confirmationId}</span>
-          <span className="history-meta">{h.patientName} · {h.payer}</span>
+          <span className="history-meta">{h.payer} · {new Date(h.ts).toLocaleDateString()}</span>
           <span className={`history-risk ${h.riskAtSubmit >= 55 ? "hr-high" : h.riskAtSubmit >= 28 ? "hr-mod" : "hr-low"}`}>{h.riskAtSubmit}%</span>
         </div>
       ))}

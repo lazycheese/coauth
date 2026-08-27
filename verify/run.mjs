@@ -243,9 +243,265 @@ async function verifyInBrowser() {
     judgmentRow && /\|\s*0\s*$/.test(judgmentRow)
       ? ok("the tool path never writes to a clinician-only field", judgmentRow)
       : bad("the tool path never writes to a clinician-only field", "trailing 0", judgmentRow ?? "row missing");
+
+    // A reviewer without a WebMCP agent must still be able to start.
+    await page.goto(BASE + "/", { waitUntil: "domcontentloaded" });
+    await page.waitForSelector(".app-shell", { timeout: 15000 });
+    await page.click("[data-testid=intro-close]");
+    const starters = await page.$$eval(".starter", (els) => els.length);
+    starters > 0
+      ? ok("someone without an agent has somewhere to start", `${starters} cases offered`)
+      : bad("someone without an agent has somewhere to start", "at least one case", "none");
+    await page.click("[data-testid=start-marcus-lee]");
+    await page.waitForSelector("[data-testid^=conflict-]", { timeout: 15000 });
+    ok("one click produces a working prior authorization");
+
+    await page.keyboard.press("Escape");
+    await verifyRules(page);
+    await verifyDoubleSubmit(page);
+    await verifySignatureVoiding(page);
+    await verifyOneRunAtATime(page);
   } finally {
     await browser.close();
   }
+}
+
+
+// ---------------------------------------------------------------------------
+// The clinical rules. Driven through the interface rather than by reaching into
+// the application, so these run against a deployment where no debug handle
+// exists. This section exists because a rule that is only ever exercised on one
+// phrasing is a rule nobody has actually checked.
+// ---------------------------------------------------------------------------
+async function verifyRules(page) {
+  section("Coverage and clinical rules");
+
+  const openPalette = async () => {
+    await page.keyboard.press("Control+K");
+    await page.waitForSelector("[data-testid=cmd-input]", { timeout: 5000 });
+  };
+  const runCommand = async (text) => {
+    await openPalette();
+    await page.fill("[data-testid=cmd-input]", text);
+    await page.click(`.cmd-item:has-text("${text}")`);
+    await page.waitForTimeout(250);
+  };
+  const setField = async (fieldId, value) => {
+    const sel = `[data-testid=field-${fieldId}] input, [data-testid=field-${fieldId}] textarea`;
+    await page.fill(sel, value);
+    await page.waitForTimeout(180);
+  };
+  const conflicts = () =>
+    page.$$eval("[data-testid^=conflict-]", (els) =>
+      els.map((e) => e.getAttribute("data-testid").replace("conflict-", ""))
+    );
+
+  // A clean chart, filled correctly, should raise nothing.
+  await runCommand("Load patient - Jane Doe");
+  await runCommand("Payer - UnitedHealthcare");
+  await runCommand("auto-fill the form");
+  await page.waitForTimeout(400);
+  const clean = await conflicts();
+  clean.length === 0
+    ? ok("a correctly filled submission raises no conflicts")
+    : bad("a correctly filled submission raises no conflicts", "none", clean.join(", "));
+
+  // A diagnosis outside the drug's indications is caught, and correcting it clears.
+  await setField("diagnosis_code", "E11.9");
+  const mismatch = await conflicts();
+  mismatch.includes("indication-mismatch")
+    ? ok("a diagnosis outside the drug's indications is caught")
+    : bad("a diagnosis outside the drug's indications is caught", "indication-mismatch", mismatch.join(", ") || "none");
+
+  await setField("diagnosis_code", "M06.9");
+  const corrected = await conflicts();
+  !corrected.includes("indication-mismatch")
+    ? ok("correcting the diagnosis clears it, so the rules read the submission")
+    : bad("correcting the diagnosis clears it", "no indication-mismatch", corrected.join(", "));
+
+  // A member id belonging to another payer is caught before clinical review.
+  await setField("member_id", "AET-55190");
+  const member = await conflicts();
+  member.includes("member-payer-mismatch")
+    ? ok("a member ID from another payer is caught")
+    : bad("a member ID from another payer is caught", "member-payer-mismatch", member.join(", ") || "none");
+  await setField("member_id", "UHC-88213");
+
+  // A dose the payer cannot match to the label is caught.
+  await setField("dose", "800 mg daily");
+  const dose = await conflicts();
+  dose.includes("dose-out-of-range")
+    ? ok("a dose outside the labelled range is caught")
+    : bad("a dose outside the labelled range is caught", "dose-out-of-range", dose.join(", ") || "none");
+  await setField("dose", "40 mg SC every other week");
+
+  // A drug the payer file does not cover is caught. Aetna covers adalimumab only.
+  await runCommand("Load patient - Jane Doe");
+  await runCommand("Payer - Aetna");
+  await setField("diagnosis_code", "M06.9");
+  await setField("hcpcs_code", "J1438");
+  const notCovered = await conflicts();
+  notCovered.includes("drug-not-covered")
+    ? ok("a drug the payer file does not cover is caught")
+    : bad("a drug the payer file does not cover is caught", "drug-not-covered", notCovered.join(", ") || "none");
+
+  // Regression guard: a narrative stating the trial ran under the required
+  // duration must not be read as satisfying that duration.
+  await runCommand("Load patient - Marcus Lee");
+  await runCommand("Payer - Aetna");
+  await setField("hcpcs_code", "J0135");
+  await setField("diagnosis_code", "L40.50");
+  await setField("step_therapy", "Methotrexate 1mo, Ongoing - <3 months");
+  const qualified = await conflicts();
+  qualified.includes("step-insufficient")
+    ? ok('"under 3 months" does not satisfy a 3-month step-therapy rule')
+    : bad('"under 3 months" does not satisfy a 3-month rule', "step-insufficient", qualified.join(", ") || "none");
+
+  // A genuine trial of adequate length still counts.
+  await setField("step_therapy", "Methotrexate 6 months, inadequate response");
+  const honest = await conflicts();
+  !honest.includes("step-insufficient")
+    ? ok("a documented six-month trial does satisfy it")
+    : bad("a documented six-month trial satisfies it", "no step-insufficient", honest.join(", "));
+
+  // The score explains itself rather than asserting a number.
+  const rationale = await page.$$eval(".risk-factor .risk-why", (els) => els.length);
+  rationale > 0
+    ? ok("each risk factor explains the weight it carries", `${rationale} explained`)
+    : bad("each risk factor explains its weight", "at least one rationale", "none");
+}
+
+// ---------------------------------------------------------------------------
+// Clicking submit twice is something people do. The approval is single use, so
+// the second attempt is refused, and that refusal must not land on top of the
+// confirmation for the submission that succeeded.
+// ---------------------------------------------------------------------------
+async function verifyDoubleSubmit(page) {
+  section("Submitting twice by accident");
+
+  await page.goto(BASE + "/", { waitUntil: "domcontentloaded" });
+  await page.waitForSelector(".app-shell", { timeout: 15000 });
+  await page.click("[data-testid=intro-close]");
+  await page.click("[data-testid=start-jane-doe]");
+  await page.waitForSelector("[data-testid=field-member_id]", { timeout: 15000 });
+
+  const fields = {
+    member_id: "UHC-88213", prescriber_npi: "1487203941", diagnosis_code: "M06.9",
+    hcpcs_code: "J0135", dose: "40 mg SC every other week", quantity: "2 syringes / 28 days",
+    step_therapy: "Methotrexate 4 months, inadequate response",
+    step_exception_rationale: "Documented failure.", medical_necessity: "Necessary.",
+  };
+  for (const [id, value] of Object.entries(fields)) {
+    await page.fill(`[data-testid=field-${id}] input, [data-testid=field-${id}] textarea`, value);
+  }
+  await page.selectOption("[data-testid=field-attending_attestation] select", "Attested");
+  await page.click("[data-testid=field-tb_screen] .evidence-slot");
+  await page.click("[data-testid=pick-tb_screen-doc-tb]");
+
+  await page.fill("[data-testid=signer-input]", "Verification Script, MD");
+  await page.check("[data-testid=attest-checkbox]");
+  await page.click("[data-testid=approve-sign]");
+  await page.waitForSelector("[data-testid=submit-btn]:not([disabled])", { timeout: 20000 });
+
+  await page.evaluate(() => {
+    const b = document.querySelector("[data-testid=submit-btn]");
+    b.click(); b.click(); b.click();
+  });
+  await page.waitForSelector("[data-testid=submitted-banner]", { timeout: 20000 });
+  await page.waitForTimeout(2500);
+
+  const blocked = await page.$("[data-testid=blocked-banner]");
+  !blocked
+    ? ok("a refused duplicate does not overwrite the confirmation")
+    : bad("a refused duplicate does not overwrite the confirmation", "no blocked banner", await page.textContent("[data-testid=blocked-banner]"));
+
+  const disabled = await page.getAttribute("[data-testid=submit-btn]", "disabled");
+  disabled !== null
+    ? ok("the submit button closes once the submission is accepted")
+    : bad("the submit button closes once accepted", "disabled", "still clickable");
+}
+
+// ---------------------------------------------------------------------------
+// An attestation is a statement about specific values. If those values change,
+// it must be made again rather than carried across to a submission the
+// clinician has not read.
+// ---------------------------------------------------------------------------
+async function verifySignatureVoiding(page) {
+  section("A signature after the submission changes");
+
+  await page.goto(BASE + "/", { waitUntil: "domcontentloaded" });
+  await page.waitForSelector(".app-shell", { timeout: 15000 });
+  await page.click("[data-testid=intro-close]");
+  await page.click("[data-testid=start-jane-doe]");
+  await page.waitForSelector("[data-testid=field-member_id]", { timeout: 15000 });
+
+  const fields = {
+    member_id: "UHC-88213", prescriber_npi: "1487203941", diagnosis_code: "M06.9",
+    hcpcs_code: "J0135", dose: "40 mg SC every other week", quantity: "2 syringes / 28 days",
+    step_therapy: "Methotrexate 4 months, inadequate response",
+    step_exception_rationale: "Documented failure.", medical_necessity: "Necessary.",
+  };
+  for (const [id, value] of Object.entries(fields)) {
+    await page.fill(`[data-testid=field-${id}] input, [data-testid=field-${id}] textarea`, value);
+  }
+  await page.selectOption("[data-testid=field-attending_attestation] select", "Attested");
+  await page.click("[data-testid=field-tb_screen] .evidence-slot");
+  await page.click("[data-testid=pick-tb_screen-doc-tb]");
+  await page.fill("[data-testid=signer-input]", "Verification Script, MD");
+  await page.check("[data-testid=attest-checkbox]");
+  await page.click("[data-testid=approve-sign]");
+  await page.waitForSelector("[data-testid=submit-btn]", { timeout: 20000 });
+
+  // Correct a value after signing.
+  await page.fill("[data-testid=field-dose] input", "40 mg SC every 14 days");
+  await page.waitForSelector("[data-testid=signature-voided]", { timeout: 10000 });
+  ok("changing a signed submission says the signature no longer applies");
+
+  const stillTicked = await page.isChecked("[data-testid=attest-checkbox]");
+  !stillTicked
+    ? ok("the attestation clears, so it cannot carry over to changed values")
+    : bad("the attestation clears when values change", "unchecked", "still ticked");
+
+  const signDisabled = await page.getAttribute("[data-testid=approve-sign]", "disabled");
+  signDisabled !== null
+    ? ok("signing again requires attesting again")
+    : bad("signing again requires attesting again", "disabled until re-attested", "clickable");
+
+  const voided = await page.$(".audit-voided");
+  voided
+    ? ok("the superseded signature is marked in the audit trail rather than removed")
+    : bad("the superseded signature is marked voided", "a voided entry", "none");
+}
+
+// ---------------------------------------------------------------------------
+// The walkthrough and the comparison both drive the workspace on a timer. The
+// comparison presents its figures as measured against one patient and one
+// payer, so a second flow writing fields underneath it would make those numbers
+// quietly untrue rather than visibly wrong.
+// ---------------------------------------------------------------------------
+async function verifyOneRunAtATime(page) {
+  section("Two scripted runs at once");
+
+  await page.goto(BASE + "/", { waitUntil: "domcontentloaded" });
+  await page.waitForSelector(".app-shell", { timeout: 15000 });
+  await page.click("[data-testid=intro-watch]");
+  await page.waitForSelector("[data-testid=demo-caption]", { timeout: 15000 });
+
+  // Start the comparison while the walkthrough is mid-flight.
+  await page.click("[data-testid=open-compare]");
+  await page.click("[data-testid=compare-run]");
+  await page.waitForSelector("[data-testid=compare-metrics]", { timeout: 90000 });
+  await page.waitForTimeout(2000);
+
+  const caption = await page.$("[data-testid=demo-caption]");
+  !caption
+    ? ok("starting a measurement stops the walkthrough driving the same workspace")
+    : bad("the walkthrough stops when a measurement starts", "no caption", await page.textContent("[data-testid=demo-caption]"));
+
+  const label = await page.textContent("[data-testid=watch-demo]");
+  label?.trim() !== "Running"
+    ? ok("the walkthrough reports itself as stopped")
+    : bad("the walkthrough reports itself as stopped", "not Running", label);
 }
 
 // ---------------------------------------------------------------------------

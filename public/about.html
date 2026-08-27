@@ -16,8 +16,8 @@
       one live page, using the <a href="https://github.com/webmachinelearning/webmcp">WebMCP</a>
       standard. Instead of an AI agent scraping the page and guessing where to
       click, CoAuth exposes the payer form as typed tools that the agent calls
-      directly - filling fields, attaching evidence, scoring denial risk, and
-      detecting clinical conflicts at machine speed.</p>
+      directly: filling fields, attaching evidence, scoring denial risk and
+      detecting clinical conflicts.</p>
     <p>The human stays in control, and that is enforced rather than asserted.
       The clinician signature is minted by the server over the exact submission
       being attested to, using a secret the browser never sees. The API then
@@ -26,15 +26,15 @@
       talk its way past that, because the check does not depend on anything the
       caller can set. This mirrors the legal reality that high-stakes clinical
       decisions require accountable human oversight.</p>
-    <p>Why it matters: up to 82% of denied prior authorizations are overturned on
-      appeal. The clinical decision was rarely wrong - the paperwork was. CoAuth
+    <p>Why it matters: about 82% of denied prior authorizations are overturned on
+      appeal. The clinical decision is usually fine; the paperwork is not. CoAuth
       fixes the filing so patients get care sooner, while keeping a licensed
       human accountable for every submission. It was built for the OpenAI WebMCP
       Challenge as a demonstration of genuine human + agent collaboration on a
       real, high-stakes workflow.</p>
     <p>The project is open source under the MIT license. See the
       <a href="https://github.com/lazycheese/coauth">source repository</a> for the
-      full implementation, including the 12 WebMCP tools, the denial-risk engine,
-      and the conflict-detection rules.</p>
+      full implementation, including the 13 WebMCP tools, the heuristic
+      denial-risk scoring and the conflict rules.</p>
   </body>
 </html>

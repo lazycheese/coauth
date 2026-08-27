@@ -2,7 +2,9 @@ import { useCoAuth } from "../store/coauthStore";
 import { docsFor, getPatient, getPayerRules, resolveSourceValue } from "../data/seed";
 import { draftFor, draftAppeal } from "../rules/drafts";
 import { scanRecord, injectionWarning } from "../rules/untrusted";
+import { BASE, BANDS, CLAMP, weightRationale } from "../rules/weights";
 import { schemas } from "./schemas";
+import { fetchWithTimeout, postJson, RequestTimeout } from "../lib/http";
 
 type ToolResult = Record<string, unknown>;
 
@@ -50,10 +52,10 @@ export const tools: ToolDef[] = [
       // Prefer the API; fall back to the in-bundle seed if it is unreachable.
       let patient: ReturnType<typeof getPatient> | undefined;
       try {
-        const res = await fetch(`/api/v1/patient/${encodeURIComponent(patientId)}`);
+        const res = await fetchWithTimeout(`/api/v1/patient/${encodeURIComponent(patientId)}`);
         if (res.ok) patient = await res.json();
       } catch {
-        /* API unreachable - use local seed */
+        /* unreachable or too slow - fall back to the bundled record */
       }
       if (!patient) patient = getPatient(patientId);
       if (!patient) {
@@ -90,10 +92,10 @@ export const tools: ToolDef[] = [
     execute: async ({ payer }, ctx?: ToolCtx) => {
       let rules: ReturnType<typeof getPayerRules> | undefined;
       try {
-        const res = await fetch(`/api/v1/payer-rules?payer=${encodeURIComponent(payer)}`);
+        const res = await fetchWithTimeout(`/api/v1/payer-rules?payer=${encodeURIComponent(payer)}`);
         if (res.ok) rules = await res.json();
       } catch {
-        /* API unreachable - use local seed */
+        /* unreachable or too slow - fall back to the bundled rules */
       }
       if (!rules) rules = getPayerRules(payer);
       if (!rules) {
@@ -268,9 +270,16 @@ export const tools: ToolDef[] = [
       return {
         status: "ok",
         summary: r
-          ? `Denial risk ${r.score}% (${r.band}). Drivers: ${r.factors.map((f) => f.label).join("; ") || "none"}.`
+          ? `Denial risk ${r.score}% (${r.band}). Drivers: ${r.factors.map((f) => `${f.label} +${f.points}`).join("; ") || "none"}. This is an additive rule score with hand-chosen weights, not a trained model; each factor carries the reasoning for its weight so you can explain the number to the clinician rather than asserting it.`
           : "No submission loaded yet.",
         risk: r,
+        scoring: {
+          model: "additive rule score, hand-weighted",
+          baseline: BASE.points,
+          bands: { high: BANDS.high, moderate: BANDS.moderate },
+          range: [CLAMP.min, CLAMP.max],
+          weights: weightRationale(),
+        },
       };
     },
   },
@@ -390,20 +399,25 @@ export const tools: ToolDef[] = [
       if (s.approvalToken.serverVerified) {
         let verdict: any;
         try {
-          const res = await fetch("/api/v1/submit", {
-            method: "POST",
-            headers: { "content-type": "application/json" },
-            body: JSON.stringify({
-              payer: s.payerRules?.id ?? "",
-              formFields: s.formFields,
-              token: s.approvalToken,
-            }),
+          const res = await postJson("/api/v1/submit", {
+            payer: s.payerRules?.id ?? "",
+            formFields: s.formFields,
+            token: s.approvalToken,
           });
-          verdict = await res.json();
-        } catch {
-          s.logActivity(actorOf(ctx), "submit", "BLOCKED - signing service unreachable");
-          const blocked = { status: "blocked", summary: "Submission blocked: the signing service could not be reached to verify the clinician approval. Retry shortly.", reason: "Could not reach the signing service to verify the clinician approval." };
-          s.setSubmitResult(blocked);
+          verdict = res.json;
+        } catch (e) {
+          const timedOut = e instanceof RequestTimeout;
+          const why = timedOut
+            ? "the signing service did not respond in time"
+            : "the signing service could not be reached";
+          s.logActivity(actorOf(ctx), "submit", `BLOCKED - ${why}`);
+          const blocked = {
+            status: "blocked",
+            summary: `Submission blocked: ${why}, so the clinician approval could not be verified. Nothing was submitted. Retry shortly.`,
+            reason: why,
+            retryable: true,
+          };
+          s.setSubmitResult({ status: "blocked", reason: why });
           return blocked;
         }
         if (verdict?.status !== "submitted") {
@@ -426,7 +440,6 @@ export const tools: ToolDef[] = [
       s.setSubmitResult({ status: "submitted", confirmationId });
       s.recordSubmission({
         confirmationId,
-        patientName: s.patient?.name ?? "-",
         payer: s.payerRules?.name ?? "-",
         riskAtSubmit: s.risk?.score ?? 0,
         hash: s.approvalToken.hash,

@@ -1,7 +1,10 @@
+import { tools } from "../mcp/registerTools";
+import { Dialog } from "./Dialog";
+
 export function Intro({ onWatch, onClose }: { onWatch: () => void; onClose: () => void }) {
   return (
-    <div className="cmp-overlay" data-testid="intro-overlay">
-      <div className="intro-modal">
+    <Dialog title="About CoAuth" testId="intro-overlay" className="intro-modal" onClose={onClose}>
+      <>
         <div className="intro-mark">CoAuth</div>
         <h1>A prior authorization a clinician and an agent fill out together.</h1>
         <p className="intro-lead">
@@ -11,7 +14,7 @@ export function Intro({ onWatch, onClose }: { onWatch: () => void; onClose: () =
           calls and the signature.
         </p>
         <ul className="intro-points">
-          <li><strong>12 WebMCP tools.</strong> The agent calls typed functions instead of scraping the page.</li>
+          <li><strong>{tools.length} WebMCP tools.</strong> The agent calls typed functions instead of scraping the page.</li>
           <li><strong>Server-verified signature.</strong> The API rejects any submission that is unsigned, forged, or edited after the clinician signed it.</li>
           <li><strong>Catches issues early.</strong> Contraindications, unmet step therapy, and a denial-risk score.</li>
         </ul>
@@ -20,7 +23,7 @@ export function Intro({ onWatch, onClose }: { onWatch: () => void; onClose: () =
           <button className="btn" data-testid="intro-close" style={{ width: "auto" }} onClick={onClose}>Explore it myself</button>
         </div>
         <p className="intro-foot muted">Tip: open in ChatGPT’s browser or Chrome with WebMCP enabled to drive it with your own prompts.</p>
-      </div>
-    </div>
+      </>
+    </Dialog>
   );
 }

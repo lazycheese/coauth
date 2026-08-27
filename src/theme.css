@@ -183,7 +183,6 @@ body {
 .cmp-head h2 { margin: 0 0 2px; font-size: 20px; }
 .cmp-actions { display: flex; gap: 8px; flex-shrink: 0; }
 .cmp-actions .btn { width: auto; }
-.cmp-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
 .cmp-col { border: 1px solid var(--line); border-radius: 6px; padding: 12px; min-height: 260px; }
 .cmp-bad { background: #fdf6f5; border-color: #f0d0cc; }
 .cmp-good { background: #f4faf6; border-color: #c9e6d2; }
@@ -196,7 +195,6 @@ body {
 .kind-error { background: #fdeeec; }
 .kind-ok { background: #eef7f0; }
 @keyframes cmpIn { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
-.cmp-metrics { display: grid; grid-template-columns: repeat(5,1fr); gap: 8px; margin-top: 16px; }
 .cmp-metric { display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 10px 6px; border: 1px solid var(--line); border-radius: 6px; text-align: center; }
 .cmp-metric span { font-size: 10px; text-transform: uppercase; letter-spacing: .03em; color: var(--muted); }
 .cmp-metric b { font-size: 15px; }
@@ -277,8 +275,6 @@ body {
   .col { overflow: visible; }
   .app { height: auto; min-height: 100vh; }
   .topbar { flex-wrap: wrap; gap: 8px; }
-  .cmp-grid { grid-template-columns: 1fr; }
-  .cmp-metrics { grid-template-columns: repeat(2,1fr); }
 }
 @media (max-width: 560px) {
   .brand-sub { display: none; }
@@ -344,3 +340,60 @@ body {
 .cmp-metric-label { color: var(--muted); }
 .cmp-metric-row .bad { color: #c0341d; }
 .cmp-metric-row .good { color: #1c7a37; }
+
+/* ---- Render failure ---- */
+.crash { max-width: 640px; margin: 80px auto; padding: 0 24px; }
+.crash h1 { font-size: 22px; margin-bottom: 8px; }
+.crash p { color: var(--muted); line-height: 1.6; }
+.crash-detail { background: #f6f8fb; border: 1px solid var(--line); border-radius: 6px; padding: 12px; font-size: 12px; overflow: auto; color: #4a5666; }
+
+/* ---- Accessibility ---- */
+.sr-only {
+  position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+  overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
+}
+.evidence-slot { width: 100%; text-align: left; font: inherit; color: inherit; }
+.evidence-picker { list-style: none; margin: 6px 0 0; padding: 0; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; }
+.evidence-picker li + li { border-top: 1px solid var(--line); }
+.evidence-picker .doc { margin: 0; border: none; border-radius: 0; }
+.doc-static { cursor: default; background: #f6f8fb; color: var(--muted); }
+
+/* ---- Risk factor reasoning ---- */
+.risk-factor summary { display: flex; justify-content: space-between; gap: 10px; cursor: pointer; list-style: none; }
+.risk-factor summary::-webkit-details-marker { display: none; }
+.risk-factor summary:hover { color: var(--ink); }
+.risk-why { font-size: 11px; line-height: 1.5; color: var(--muted); margin: 4px 0 6px; padding-left: 2px; }
+
+/* ---- Starting from cold ---- */
+.empty-title { font-size: 15px; font-weight: 600; margin: 0 0 6px; }
+.starters { list-style: none; padding: 0; margin: 14px 0; display: flex; flex-direction: column; gap: 8px; }
+.starter { display: flex; flex-direction: column; gap: 3px; width: 100%; text-align: left; font: inherit;
+  padding: 10px 12px; border: 1px solid var(--line); border-radius: 6px; background: #fff; cursor: pointer; }
+.starter:hover { border-color: #9db8ff; background: #fbfdff; }
+.starter-who { font-size: 13px; font-weight: 600; color: var(--ink); }
+.starter-why { font-size: 12px; color: var(--muted); line-height: 1.45; }
+
+/* ---- Narrow screens ---- */
+@media (max-width: 640px) {
+  /* A title beside a button row leaves the title a column one word wide. */
+  .cmp-head { flex-direction: column; align-items: stretch; gap: 12px; }
+  .cmp-head h2 { font-size: 18px; }
+  .cmp-actions { justify-content: flex-start; }
+  .cmp-modal, .appeal-modal, .intro-modal { padding: 16px; width: min(100%, 96vw); }
+
+  /* Three columns of numbers do not fit; label above, values beside. */
+  .cmp-metric-row { grid-template-columns: 1fr 1fr; gap: 4px 10px; }
+  .cmp-metric-label { grid-column: 1 / -1; font-size: 11px; text-transform: uppercase; letter-spacing: .03em; }
+  .cmp-metric-head { display: none; }
+  .cmp-metric-row b::before { content: attr(data-side); display: block; font-size: 10px;
+    text-transform: uppercase; letter-spacing: .03em; color: var(--muted); font-weight: 600; }
+
+  .topbar { align-items: flex-start; }
+  .topbar-right { flex-wrap: wrap; }
+}
+
+/* ---- Voided signature ---- */
+.banner-warn { background: #fff6e6; color: #8a5a00; border: 1px solid #f3dca6; }
+.audit-voided .audit-row, .audit-voided { opacity: .7; }
+.audit-voided span:first-child { text-decoration: line-through; }
+.verify-voided { color: #b7791f; }

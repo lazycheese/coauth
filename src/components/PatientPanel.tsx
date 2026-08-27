@@ -5,10 +5,6 @@ import { HistoryPanel } from "./HistoryPanel";
 export function PatientPanel() {
   const patient = useCoAuth((s) => s.patient);
   const docs = useCoAuth((s) => s.docs);
-  const focusedField = useCoAuth((s) => s.focusedField);
-  const attach = useCoAuth((s) => s.attach);
-  const runValidation = useCoAuth((s) => s.runValidation);
-  const logActivity = useCoAuth((s) => s.logActivity);
 
   if (!patient) {
     return (
@@ -18,13 +14,6 @@ export function PatientPanel() {
       </>
     );
   }
-
-  const onAttach = (docId: string) => {
-    if (!focusedField) return;
-    attach(focusedField, docId);
-    runValidation();
-    logActivity("human", "attach_evidence", `${docId} -> ${focusedField}`);
-  };
 
   return (
     <div className="patient" data-testid="patient-card">
@@ -44,16 +33,17 @@ export function PatientPanel() {
       </div>
 
       <div className="evidence">
-        <p className="muted">Evidence {focusedField ? `- click to attach to “${focusedField}”` : "(focus a field to attach)"}</p>
+        <p className="muted" id="evidence-heading">Documents on file</p>
+        <p className="muted small">Attach one from the evidence field it belongs to.</p>
         {docs.map((d) => (
-          <button key={d.id} className="doc" data-testid={`doc-${d.id}`} disabled={!focusedField} onClick={() => onAttach(d.id)}>
+          <div key={d.id} className="doc doc-static" data-testid={`doc-${d.id}`}>
             {d.label}
             {!scanUntrusted(d.content).clean && (
               <span className="doc-flag" data-testid={`doc-flag-${d.id}`}>
                 contains instruction-like text, treated as data
               </span>
             )}
-          </button>
+          </div>
         ))}
       </div>
 

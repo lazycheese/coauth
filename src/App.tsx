@@ -10,6 +10,7 @@ import { CommandPalette } from "./components/CommandPalette";
 import { useCoAuth } from "./store/coauthStore";
 import { tools } from "./mcp/registerTools";
 import { runDemo, type DemoHandle } from "./demo/runner";
+import { beginScriptedRun, endScriptedRun } from "./app/scriptedRun";
 
 function TopBar({ onCompare, onDemo, demoRunning }: { onCompare: () => void; onDemo: () => void; demoRunning: boolean }) {
   const toolCount = tools.length;
@@ -44,16 +45,25 @@ export function App() {
   const handleRef = useRef<DemoHandle | null>(null);
 
   const startDemo = async () => {
-    if (handleRef.current) handleRef.current.cancelled = true;
     const handle: DemoHandle = { cancelled: false };
     handleRef.current = handle;
+    // Takes over from anything already driving the workspace, and gives up if
+    // something else takes over from it.
+    beginScriptedRun("walkthrough", () => {
+      handle.cancelled = true;
+      setDemoRunning(false);
+    });
     setDemoRunning(true);
     try {
       await runDemo((c) => setCaption(c), handle);
     } catch {
-      /* cancelled */
+      /* cancelled by another run */
     } finally {
-      if (!handle.cancelled) setDemoRunning(false);
+      endScriptedRun("walkthrough");
+      setDemoRunning(false);
+      // Clearing the caption here rather than in the cancel callback: a step
+      // already in flight would otherwise write its caption back afterwards.
+      if (handle.cancelled) setCaption(null);
     }
   };
 

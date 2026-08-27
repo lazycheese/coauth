@@ -31,7 +31,8 @@
       "source": "/api/(.*)",
       "headers": [
         { "key": "Vary", "value": "Accept, Accept-Encoding" },
-        { "key": "API-Version", "value": "1.0.0" }
+        { "key": "API-Version", "value": "1.0.0" },
+        { "key": "X-Content-Classification", "value": "fictional-demo-data" }
       ]
     },
     {

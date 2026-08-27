@@ -1,15 +1,23 @@
 import { useEffect, useRef, useState } from "react";
 import { useCoAuth } from "../store/coauthStore";
 import { humanActions } from "../app/actions";
+import { usePrefersReducedMotion } from "../lib/useReducedMotion";
 
 export function RiskMeter() {
   const risk = useCoAuth((s) => s.risk);
   const target = risk?.score ?? null;
   const [display, setDisplay] = useState(target ?? 0);
   const raf = useRef<number>();
+  const reducedMotion = usePrefersReducedMotion();
 
   useEffect(() => {
     if (target == null) return;
+    // Counting a number up and down is movement. Someone who has asked for less
+    // of it gets the figure, not the journey.
+    if (reducedMotion) {
+      setDisplay(target);
+      return;
+    }
     const from = display;
     const start = performance.now();
     const dur = 550;
@@ -24,13 +32,23 @@ export function RiskMeter() {
       if (raf.current) cancelAnimationFrame(raf.current);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [target]);
+  }, [target, reducedMotion]);
 
   if (target == null) return null;
   const band = risk!.band;
 
   return (
-    <div className={`risk-meter band-${band}`} data-testid="risk-meter" data-score={target}>
+    <div
+      className={`risk-meter band-${band}`}
+      data-testid="risk-meter"
+      data-score={target}
+      role="progressbar"
+      aria-label="Denial risk"
+      aria-valuemin={0}
+      aria-valuemax={100}
+      aria-valuenow={target}
+      aria-valuetext={`${target} percent, ${band} risk`}
+    >
       <div className="risk-head">
         <span className="risk-label">Denial risk</span>
         <span className="risk-score" data-testid="risk-score">{display}%</span>
@@ -50,8 +68,13 @@ export function RiskMeter() {
         <ul className="risk-factors">
           {risk!.factors.map((f, i) => (
             <li key={i} className={`sev-${f.severity}`}>
-              <span>{f.label}</span>
-              <span className="risk-pts">+{f.points}</span>
+              <details className="risk-factor">
+                <summary>
+                  <span>{f.label}</span>
+                  <span className="risk-pts">+{f.points}</span>
+                </summary>
+                <p className="risk-why">{f.because}</p>
+              </details>
             </li>
           ))}
         </ul>

@@ -2,16 +2,20 @@ import { useState } from "react";
 import { useCoAuth } from "../store/coauthStore";
 import { humanActions } from "../app/actions";
 import { runBaseline, runToolPath, type RunMetrics } from "../demo/baseline";
+import { Dialog } from "./Dialog";
+import { beginScriptedRun, endScriptedRun } from "../app/scriptedRun";
 
 type Phase = "idle" | "running" | "done";
 
 function MetricRow({ label, a, b, better }: { label: string; a: string; b: string; better: "low" | "high" | "none" }) {
-  // "better" only drives colour; the values themselves are measured.
+  // "better" only drives colour; the values themselves are measured. The
+  // data-side labels carry the column meaning on narrow screens, where the
+  // header row is hidden.
   return (
     <div className="cmp-metric-row">
       <span className="cmp-metric-label">{label}</span>
-      <b className={better === "none" ? "" : "bad"}>{a}</b>
-      <b className={better === "none" ? "" : "good"}>{b}</b>
+      <b className={better === "none" ? "" : "bad"} data-side="Baseline">{a}</b>
+      <b className={better === "none" ? "" : "good"} data-side="Tools">{b}</b>
     </div>
   );
 }
@@ -24,6 +28,15 @@ export function Compare({ onClose }: { onClose: () => void }) {
   const [tools, setTools] = useState<RunMetrics | null>(null);
 
   const run = async () => {
+    // Measuring requires sole control of the workspace, so this stops the
+    // walkthrough if it happens to be mid-flight.
+    const cancelled = { current: false };
+    beginScriptedRun("comparison", () => {
+      cancelled.current = true;
+      setPhase("idle");
+      setStep("");
+    });
+
     setPhase("running");
     setBaseline(null);
     setTools(null);
@@ -35,23 +48,31 @@ export function Compare({ onClose }: { onClose: () => void }) {
       await humanActions.choosePayer("aetna");
     };
 
-    await setup();
-    setStep("Running the DOM-driven baseline");
-    const b = await runBaseline((s) => setStep(`Baseline: ${s}`));
-    setBaseline(b);
+    try {
+      await setup();
+      if (cancelled.current) return;
+      setStep("Running the DOM-driven baseline");
+      const b = await runBaseline((s) => setStep(`Baseline: ${s}`));
+      if (cancelled.current) return;
+      setBaseline(b);
 
-    await setup();
-    setStep("Running the same task through the tools");
-    const t = await runToolPath((s) => setStep(`Tools: ${s}`));
-    setTools(t);
+      await setup();
+      if (cancelled.current) return;
+      setStep("Running the same task through the tools");
+      const t = await runToolPath((s) => setStep(`Tools: ${s}`));
+      if (cancelled.current) return;
+      setTools(t);
 
-    setStep("");
-    setPhase("done");
+      setStep("");
+      setPhase("done");
+    } finally {
+      endScriptedRun("comparison");
+    }
   };
 
   return (
-    <div className="cmp-overlay" data-testid="compare-overlay">
-      <div className="cmp-modal">
+    <Dialog title="Same form, with and without tools" testId="compare-overlay" className="cmp-modal" onClose={onClose}>
+      <>
         <div className="cmp-head">
           <div>
             <h2>Same form, with and without tools</h2>
@@ -68,7 +89,7 @@ export function Compare({ onClose }: { onClose: () => void }) {
           </div>
         </div>
 
-        {phase === "running" && <div className="cmp-progress" data-testid="compare-progress">{step}</div>}
+        {phase === "running" && <div className="cmp-progress" role="status" aria-live="polite" data-testid="compare-progress">{step}</div>}
 
         {phase === "idle" && (
           <p className="cmp-explain muted">
@@ -102,7 +123,7 @@ export function Compare({ onClose }: { onClose: () => void }) {
             </p>
           </>
         )}
-      </div>
-    </div>
+      </>
+    </Dialog>
   );
 }

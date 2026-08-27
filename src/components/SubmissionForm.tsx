@@ -3,6 +3,8 @@ import { useCoAuth } from "../store/coauthStore";
 import type { FieldDef } from "../data/seed";
 import { RiskMeter } from "./RiskMeter";
 import { ConflictAlerts } from "./ConflictAlerts";
+import { scanUntrusted } from "../rules/untrusted";
+import { humanActions } from "../app/actions";
 
 function FieldRow({ field, flash }: { field: FieldDef; flash: boolean }) {
   const value = useCoAuth((s) => s.formFields[field.id]);
@@ -18,6 +20,11 @@ function FieldRow({ field, flash }: { field: FieldDef; flash: boolean }) {
   const prov = useCoAuth((s) => s.provenance[field.id]);
   const logActivity = useCoAuth((s) => s.logActivity);
   const status = result?.ok ? "ok" : result?.invalid ? "invalid" : field.requiresHumanJudgment ? "judgment" : "missing";
+  const statusLabel =
+    status === "ok" ? "complete" : status === "invalid" ? "filled but not valid" : status === "judgment" ? "awaiting clinician" : "not filled";
+  const docs = useCoAuth((s) => s.docs);
+  const attach = useCoAuth((s) => s.attach);
+  const [picking, setPicking] = useState(false);
   const edit = (v: string) => {
     setField(field.id, v);
     setProvenance(field.id, { by: "clinician" });
@@ -34,15 +41,51 @@ function FieldRow({ field, flash }: { field: FieldDef; flash: boolean }) {
   ) : null;
 
   if (field.type === "evidence") {
+    // The picker lives with the field rather than in another panel, so it can
+    // be reached with the keyboard and does not require crossing the page.
     return (
       <div className={`field field-${status} ${flash ? "field-flash" : ""}`} data-testid={`field-${field.id}`}>
-        <label>
-          <span className="field-label">{field.label}</span>
-          <div className={`evidence-slot ${value ? "attached" : ""}`} tabIndex={0} onFocus={() => setFocused(field.id)} onClick={() => setFocused(field.id)}>
-            {value ? <>{docLabel ?? String(value)}</> : <span className="muted">No evidence attached. Focus this field, then pick a document.</span>}
-          </div>
-        </label>
-        <span className={`field-status status-${status}`} aria-label={status} />
+        <span className="field-label" id={`${field.id}-label`}>
+          {field.label}
+          {ProvBadge}
+        </span>
+        <button
+          type="button"
+          className={`evidence-slot ${value ? "attached" : ""}`}
+          aria-labelledby={`${field.id}-label`}
+          aria-expanded={picking}
+          aria-describedby={`${field.id}-state`}
+          onClick={() => { setFocused(field.id); setPicking((p) => !p); }}
+        >
+          <span id={`${field.id}-state`}>
+            {value ? (docLabel ?? String(value)) : "No evidence attached. Choose a document."}
+          </span>
+        </button>
+        {picking && (
+          <ul className="evidence-picker" data-testid={`picker-${field.id}`} aria-label={`Documents for ${field.label}`}>
+            {docs.map((d) => (
+              <li key={d.id}>
+                <button
+                  type="button"
+                  className="doc"
+                  data-testid={`pick-${field.id}-${d.id}`}
+                  onClick={() => {
+                    attach(field.id, d.id);
+                    runValidation();
+                    logActivity("human", "attach_evidence", `${d.id} -> ${field.id}`);
+                    setPicking(false);
+                  }}
+                >
+                  {d.label}
+                  {!scanUntrusted(d.content).clean && (
+                    <span className="doc-flag">contains instruction-like text, treated as data</span>
+                  )}
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+        <span className={`field-status status-${status}`} role="img" aria-label={`Status: ${statusLabel}`} />
       </div>
     );
   }
@@ -103,10 +146,34 @@ function FieldRow({ field, flash }: { field: FieldDef; flash: boolean }) {
           </div>
         </div>
       )}
-      <span className={`field-status status-${status}`} aria-label={status} />
+      <span className={`field-status status-${status}`} role="img" aria-label={`Status: ${statusLabel}`} />
     </div>
   );
 }
+
+/** Cases worth starting from, described by what each one demonstrates rather
+ * than by who is in it. Someone opening this cold needs to know why they would
+ * pick one. */
+const STARTERS = [
+  {
+    patientId: "jane-doe",
+    payer: "uhc",
+    who: "Jane Doe, UnitedHealthcare",
+    shows: "A request that meets the criteria. Fills cleanly and reaches signature.",
+  },
+  {
+    patientId: "marcus-lee",
+    payer: "aetna",
+    who: "Marcus Lee, Aetna",
+    shows: "A positive TB screen and a short drug trial. Submission is blocked until the clinician overrides it.",
+  },
+  {
+    patientId: "ana-torres",
+    payer: "aetna",
+    who: "Ana Torres, Aetna",
+    shows: "Etanercept against a payer file that covers adalimumab only. Exercises drug coverage.",
+  },
+];
 
 function ValidationBar() {
   const v = useCoAuth((s) => s.validation);
@@ -125,6 +192,8 @@ function ValidationBar() {
   return (
     <div
       className={`validation-bar tone-${tone}`}
+      role="status"
+      aria-live="polite"
       data-testid="validation-bar"
       data-issues={issues}
       data-missing={missing}
@@ -164,8 +233,32 @@ export function SubmissionForm() {
   if (!rules) {
     return (
       <div className="empty-state" data-testid="form-empty">
-        <p>No active prior authorization.</p>
-        <p className="muted">Ask the agent to start one, e.g. “Start a prior auth for Jane Doe’s Humira request with UnitedHealthcare.”</p>
+        <p className="empty-title">No active prior authorization.</p>
+        <p className="muted">
+          With a WebMCP agent, ask it to start one: “Start a prior auth for Jane Doe’s Humira request with
+          UnitedHealthcare.” Without one, pick a case below and drive it yourself.
+        </p>
+        <ul className="starters">
+          {STARTERS.map((c) => (
+            <li key={c.patientId + c.payer}>
+              <button
+                type="button"
+                className="starter"
+                data-testid={`start-${c.patientId}`}
+                onClick={async () => {
+                  await humanActions.loadPatient(c.patientId);
+                  await humanActions.choosePayer(c.payer);
+                }}
+              >
+                <span className="starter-who">{c.who}</span>
+                <span className="starter-why">{c.shows}</span>
+              </button>
+            </li>
+          ))}
+        </ul>
+        <p className="muted small">
+          Press Cmd K, or Ctrl K, at any point for the tools an agent would call.
+        </p>
       </div>
     );
   }

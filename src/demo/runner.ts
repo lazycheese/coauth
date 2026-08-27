@@ -38,7 +38,7 @@ export async function runDemo(setCaption: (c: string) => void, handle: DemoHandl
     ["quantity", "2 syringes / 28 days"],
     ["step_therapy", "Methotrexate 1 month - ongoing"],
   ];
-  setCaption("The agent fills every field at machine speed - structured, no guessing.");
+  setCaption("The agent fills every field from the record, typed and checked as it goes.");
   for (const [f, v] of fills) {
     if (handle.cancelled) throw new Error("cancelled");
     await t.fillField(f, v);

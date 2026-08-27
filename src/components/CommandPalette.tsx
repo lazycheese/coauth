@@ -61,6 +61,7 @@ export function CommandPalette() {
     () => [
       { label: "Load patient - Jane Doe (clean)", hint: "load_patient_context", run: () => humanActions.loadPatient("jane-doe") },
       { label: "Load patient - Marcus Lee (denial risk)", hint: "load_patient_context", run: () => humanActions.loadPatient("marcus-lee") },
+      { label: "Load patient - Ana Torres (etanercept, coverage check)", hint: "load_patient_context", run: () => humanActions.loadPatient("ana-torres") },
       { label: "Payer - UnitedHealthcare", hint: "check_payer_rules", run: () => humanActions.choosePayer("uhc") },
       { label: "Payer - Aetna", hint: "check_payer_rules", run: () => humanActions.choosePayer("aetna") },
       { label: "Payer - Cigna", hint: "check_payer_rules", run: () => humanActions.choosePayer("cigna") },

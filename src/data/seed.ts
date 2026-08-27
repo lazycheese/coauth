@@ -17,7 +17,10 @@ export interface FieldDef {
 export interface PayerRules {
   id: string;
   name: string;
+  /** Display label for the request. */
   drug: string;
+  /** HCPCS codes this payer file authorises. Checked against the submission. */
+  coveredDrugs: string[];
   /** Human-readable coverage policy shown to the clinician. */
   policy: string[];
   /** The same policy in machine-checkable form, evaluated against a submission. */
@@ -135,6 +138,24 @@ export const patients: Record<string, Patient> = {
     ],
     clinical: { tbScreen: "positive", activeInfection: false, priorBiologics: 0 },
   },
+  "ana-torres": {
+    id: "ana-torres",
+    name: "Ana Torres",
+    dob: "1986-02-19",
+    memberId: "UHC-41077",
+    diagnoses: [{ code: "M45.0", label: "Ankylosing spondylitis of multiple sites in spine" }],
+    medsTried: [
+      { name: "Naproxen", klass: "NSAID", durationMonths: 5, outcome: "Inadequate response" },
+      { name: "Methotrexate", klass: "csDMARD", durationMonths: 6, outcome: "Inadequate response" },
+      { name: "Sulfasalazine", klass: "csDMARD", durationMonths: 4, outcome: "Inadequate response" },
+    ],
+    labs: [
+      { name: "CRP", value: "24 mg/L", date: "2026-08-15", flag: "abnormal" },
+      { name: "HLA-B27", value: "Positive", date: "2026-05-11", flag: "abnormal" },
+      { name: "TB (QuantiFERON)", value: "Negative", date: "2026-07-30", flag: "normal" },
+    ],
+    clinical: { tbScreen: "negative", activeInfection: false, priorBiologics: 0 },
+  },
 };
 
 export const docs: EvidenceDoc[] = [
@@ -161,6 +182,7 @@ export const payers: Record<string, PayerRules> = {
     id: "uhc",
     name: "UnitedHealthcare",
     drug: DRUG,
+    coveredDrugs: ["J0135", "J1438"],
     policy: [
       "Documented trial & failure of ≥1 conventional DMARD (e.g. methotrexate) for ≥3 months.",
       "Negative TB screening within 12 months prior to initiating a biologic.",
@@ -178,6 +200,7 @@ export const payers: Record<string, PayerRules> = {
     id: "aetna",
     name: "Aetna",
     drug: DRUG,
+    coveredDrugs: ["J0135"],
     policy: [
       "Trial & failure of ≥1 conventional DMARD for ≥3 months.",
       "Negative TB screening required prior to biologic therapy.",
@@ -194,6 +217,7 @@ export const payers: Record<string, PayerRules> = {
     id: "cigna",
     name: "Cigna",
     drug: DRUG,
+    coveredDrugs: ["J0135", "J1438"],
     policy: [
       "Trial & failure of ≥2 conventional DMARDs, or documented intolerance.",
       "Prescriber must be, or consult, a rheumatologist (specialty attestation).",

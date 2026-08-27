@@ -1,10 +1,13 @@
 import { getDrug, payerMemberPrefix, type Patient, type PayerRules } from "../data/seed";
 import { validate } from "./validate";
+import { BASE, COMPLETENESS, CONFLICT, BANDS, CLAMP } from "./weights";
 
 export interface RiskFactor {
   label: string;
   points: number;
   severity: "low" | "medium" | "high";
+  /** Why this contributes what it does. */
+  because: string;
 }
 
 export interface RiskAssessment {
@@ -23,6 +26,8 @@ export interface Conflict {
   requiresHumanOverride: boolean;
   /** Points added to the denial-risk score while unresolved. */
   points: number;
+  /** Why the weight is what it is, so the score can be argued with. */
+  weightRationale: string;
 }
 
 export interface SubmissionContext {
@@ -46,11 +51,23 @@ function chartDmardCount(patient: Patient | null): number {
   return patient ? patient.medsTried.filter((m) => m.klass === "csDMARD").length : 0;
 }
 
-/** Longest duration the submitted step-therapy narrative documents, in months. */
+/** Longest duration the submitted step-therapy narrative documents, in months.
+ *
+ * Only counts a duration the text actually asserts. A narrative saying a trial
+ * ran for "under 3 months" is stating that the requirement was not met, and
+ * reading the 3 out of it would let the text satisfy the very criterion it
+ * denies. Qualified durations are therefore ignored rather than counted. */
+const UNMET_QUALIFIER = /(?:<|under|less\s+than|fewer\s+than|no\s+more\s+than|up\s+to|only|barely|nearly|almost|approx\.?|approximately|~)\s*$/i;
+
 function narrativeDmardMonths(text: string): number {
   let max = 0;
-  for (const m of text.matchAll(/(\d+)\s*(?:mo|month)/gi)) max = Math.max(max, Number(m[1]));
-  for (const m of text.matchAll(/(\d+)\s*(?:yr|year)/gi)) max = Math.max(max, Number(m[1]) * 12);
+  const consider = (match: RegExpMatchArray, months: number) => {
+    const preceding = text.slice(0, match.index ?? 0);
+    if (UNMET_QUALIFIER.test(preceding)) return;
+    max = Math.max(max, months);
+  };
+  for (const m of text.matchAll(/(\d+)\s*(?:mo|month)/gi)) consider(m, Number(m[1]));
+  for (const m of text.matchAll(/(\d+)\s*(?:yr|year)/gi)) consider(m, Number(m[1]) * 12);
   return max;
 }
 
@@ -58,6 +75,24 @@ function narrativeDmardMonths(text: string): number {
 type Rule = (c: SubmissionContext) => Conflict | null;
 
 const RULES: Rule[] = [
+  // The submitted drug must be one this payer file actually authorises.
+  ({ formFields, rules }) => {
+    const hcpcs = str(formFields["hcpcs_code"]).toUpperCase();
+    if (!hcpcs || !rules) return null;
+    const covered = rules.coveredDrugs ?? [];
+    if (!covered.length || covered.includes(hcpcs)) return null;
+    const drug = getDrug(hcpcs);
+    return {
+      id: "drug-not-covered",
+      severity: "critical",
+      label: "Requested drug is not covered by this payer file",
+      detail: `${drug?.name ?? hcpcs} is not on the ${rules.name} authorisation for this request, which covers ${covered.join(", ")}. Submitting it as-is authorises the wrong therapy. Correct the code, switch to the right payer file, or record a clinician override.`,
+      requiresHumanOverride: true,
+      points: CONFLICT["drug-not-covered"].points,
+      weightRationale: CONFLICT["drug-not-covered"].because,
+    };
+  },
+
   // Requested drug must be indicated for the diagnosis actually submitted.
   ({ formFields }) => {
     const hcpcs = str(formFields["hcpcs_code"]);
@@ -71,7 +106,8 @@ const RULES: Rule[] = [
         label: "Requested HCPCS code is not a recognised drug",
         detail: `HCPCS ${hcpcs} does not match a drug in the coverage file. Confirm the code before submitting.`,
         requiresHumanOverride: false,
-        points: 22,
+        points: CONFLICT["unknown-drug"].points,
+      weightRationale: CONFLICT["unknown-drug"].because,
       };
     }
     if (!drug.indications.some((p) => dx.startsWith(p))) {
@@ -81,7 +117,8 @@ const RULES: Rule[] = [
         label: "Requested drug is not indicated for the submitted diagnosis",
         detail: `${drug.name} is covered for ${drug.indicationLabel}. The submitted diagnosis ${dx} is outside that set. Correct the diagnosis or the drug, or record a clinician override for off-label use.`,
         requiresHumanOverride: true,
-        points: 30,
+        points: CONFLICT["indication-mismatch"].points,
+      weightRationale: CONFLICT["indication-mismatch"].because,
       };
     }
     return null;
@@ -103,7 +140,8 @@ const RULES: Rule[] = [
         label: "Dose is outside the labelled range",
         detail: `${mg} mg is outside the ${lo}-${hi} mg range for ${drug.name}. Payers routinely deny doses they cannot match to the label.`,
         requiresHumanOverride: false,
-        points: 20,
+        points: CONFLICT["dose-out-of-range"].points,
+      weightRationale: CONFLICT["dose-out-of-range"].because,
       };
     }
     return null;
@@ -121,7 +159,8 @@ const RULES: Rule[] = [
         label: "Member ID does not match the selected payer",
         detail: `${rules.name} member IDs begin with ${prefix}. The submitted ID "${member}" does not, which will be rejected before clinical review.`,
         requiresHumanOverride: false,
-        points: 24,
+        points: CONFLICT["member-payer-mismatch"].points,
+      weightRationale: CONFLICT["member-payer-mismatch"].because,
       };
     }
     return null;
@@ -138,7 +177,8 @@ const RULES: Rule[] = [
       label: "Positive TB screen with biologic request",
       detail: `QuantiFERON positive. ${drug.name} is contraindicated in untreated latent TB. Requires clinician override documenting latent-TB treatment or risk acceptance.`,
       requiresHumanOverride: true,
-      points: 33,
+      points: CONFLICT["tb-contra"].points,
+      weightRationale: CONFLICT["tb-contra"].because,
     };
   },
 
@@ -153,7 +193,8 @@ const RULES: Rule[] = [
       label: "No TB screening evidence attached",
       detail: `${drug.name} requires documented TB screening before initiation. Attach the screening result to the submission.`,
       requiresHumanOverride: false,
-      points: 18,
+      points: CONFLICT["tb-evidence-missing"].points,
+      weightRationale: CONFLICT["tb-evidence-missing"].because,
     };
   },
 
@@ -176,7 +217,8 @@ const RULES: Rule[] = [
       label: "Step-therapy criteria not met",
       detail: `${rules.name} requires ${minDmardCount} conventional DMARD(s) tried for at least ${minDmardMonths} months: ${reasons.join("; ")}. Document a step-therapy exception rationale or extend the trial.`,
       requiresHumanOverride: false,
-      points: 26,
+      points: CONFLICT["step-insufficient"].points,
+      weightRationale: CONFLICT["step-insufficient"].because,
     };
   },
 
@@ -191,7 +233,8 @@ const RULES: Rule[] = [
         label: "Specialist involvement not attested",
         detail: `${rules.name} requires the prescriber to be, or to have consulted, a rheumatologist. Record the specialist attestation.`,
         requiresHumanOverride: false,
-        points: 16,
+        points: CONFLICT["specialist-missing"].points,
+      weightRationale: CONFLICT["specialist-missing"].because,
       };
     }
     return null;
@@ -223,33 +266,45 @@ export function assessRisk(
   overrides: Record<string, string> = {}
 ): RiskAssessment {
   const factors: RiskFactor[] = [];
-  let score = 12; // base administrative risk on any submission
+  let score = BASE.points;
 
   const v = validate(formFields, rules);
   const missing = Math.max(0, v.failCount - v.invalidCount);
   if (missing > 0) {
-    const pts = Math.min(34, 8 + missing * 6);
+    const c = COMPLETENESS;
+    const pts = Math.min(c.missingCap, c.missingFirst + missing * c.missingEach);
     score += pts;
-    factors.push({ label: `${missing} required field(s) incomplete`, points: pts, severity: "high" });
+    factors.push({ label: `${missing} required field(s) incomplete`, points: pts, severity: "high", because: c.missingBecause });
   }
   if (v.invalidCount > 0) {
-    const pts = Math.min(30, 10 + v.invalidCount * 8);
+    const c = COMPLETENESS;
+    const pts = Math.min(c.invalidCap, c.invalidFirst + v.invalidCount * c.invalidEach);
     score += pts;
-    factors.push({ label: `${v.invalidCount} field(s) have format/content errors`, points: pts, severity: "high" });
+    factors.push({ label: `${v.invalidCount} field(s) have format/content errors`, points: pts, severity: "high", because: c.invalidBecause });
   }
   if (v.judgmentCount > 0) {
-    score += 8;
-    factors.push({ label: `${v.judgmentCount} clinician judgment item(s) unresolved`, points: 8, severity: "medium" });
+    score += COMPLETENESS.judgment.points;
+    factors.push({
+      label: `${v.judgmentCount} clinician judgment item(s) unresolved`,
+      points: COMPLETENESS.judgment.points,
+      severity: "medium",
+      because: COMPLETENESS.judgment.because,
+    });
   }
 
   // Unresolved conflicts found in the submission itself carry their own weight.
   for (const c of detectConflicts(formFields, patient, rules, overrides)) {
     if (overrides[c.id]) continue;
     score += c.points;
-    factors.push({ label: c.label, points: c.points, severity: c.severity === "critical" ? "high" : "medium" });
+    factors.push({
+      label: c.label,
+      points: c.points,
+      severity: c.severity === "critical" ? "high" : "medium",
+      because: c.weightRationale,
+    });
   }
 
-  score = Math.max(3, Math.min(95, score));
-  const band = score >= 55 ? "high" : score >= 28 ? "moderate" : "low";
+  score = Math.max(CLAMP.min, Math.min(CLAMP.max, score));
+  const band = score >= BANDS.high ? "high" : score >= BANDS.moderate ? "moderate" : "low";
   return { score, band, factors };
 }

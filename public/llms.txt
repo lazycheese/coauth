@@ -5,7 +5,7 @@
 > WebMCP standard. The agent fills and checks the payer form via typed tools; the
 > human keeps clinical judgment and the legally required signature.
 
-CoAuth exposes 12 WebMCP tools. The agent can load the patient record, read payer
+CoAuth exposes 13 WebMCP tools. The agent can load the patient record, read payer
 rules, fill non-judgment fields, attach evidence, assess denial risk, detect
 clinical conflicts, and draft narrative text and appeal letters. The agent cannot
 fabricate clinician-judgment fields or submit - `submit` is gated behind a human
@@ -40,6 +40,7 @@ clinician: `submit` is blocked until a human signs.
 ## Tools
 
 - get_workflow_guidance: recommended sequence + safety rules (read)
+- get_submission_state: read the whole current submission, provenance and gate status (read)
 - load_patient_context: load a structured patient record (read)
 - check_payer_rules: fetch a payer's required fields and policy (read)
 - fill_field: set one typed form field (write)

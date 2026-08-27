@@ -29,6 +29,7 @@
       "registration": ["document.modelContext", "navigator.modelContext"],
       "tools": [
         "get_workflow_guidance",
+        "get_submission_state",
         "load_patient_context",
         "check_payer_rules",
         "fill_field",

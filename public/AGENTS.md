@@ -30,7 +30,7 @@ authorization together with a human clinician.
 
 ## Tools
 
-`get_workflow_guidance`, `load_patient_context`, `check_payer_rules`,
+`get_workflow_guidance`, `get_submission_state`, `load_patient_context`, `check_payer_rules`,
 `fill_field`, `attach_evidence`, `validate_submission`, `assess_denial_risk`,
 `detect_conflicts`, `draft_field`, `draft_appeal`, `flag_for_human`, `submit`.
 

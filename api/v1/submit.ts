@@ -1,4 +1,5 @@
 import { signingSecret, digestOf, mint, timingSafeEqual, TOKEN_TTL_MS, type ApprovalPayload } from "../_sign";
+import { claimOnce } from "../_nonce";
 
 export const config = { runtime: "edge" };
 
@@ -56,6 +57,7 @@ export default async function handler(req: Request): Promise<Response> {
     signer: String(token.signer ?? ""),
     ts: Number(token.ts ?? 0),
     digest: String(token.digest ?? ""),
+    jti: String(token.jti ?? ""),
   };
 
   // 1. The token must be one we issued.
@@ -88,15 +90,37 @@ export default async function handler(req: Request): Promise<Response> {
   }
 
   const confirmationId = "PA-" + payload.digest.slice(0, 8).toUpperCase();
+
+  // 4. An approval is good for one submission. Claiming it is atomic where a
+  //    durable store is configured, so a replay cannot file a second time.
+  const claim = await claimOnce(payload.jti, confirmationId, TOKEN_TTL_MS);
+  if (!claim.fresh) {
+    return Response.json(
+      {
+        status: "rejected",
+        error: {
+          code: "approval_already_used",
+          message: "This clinician approval has already been submitted.",
+          hint: "Each approval is valid for a single submission. Re-sign to submit again.",
+        },
+        confirmationId: claim.existing,
+        replayProtection: claim.protection,
+      },
+      { status: 409, headers: H }
+    );
+  }
+
   return Response.json(
     {
       status: "submitted",
       confirmationId,
+      replayProtection: claim.protection,
       audit: {
         signer: payload.signer,
         attestation: payload.attestation,
         signedAt: new Date(payload.ts).toISOString(),
         digest: payload.digest,
+        approvalId: payload.jti,
         verifiedBy: "server",
       },
     },

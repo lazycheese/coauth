@@ -36,6 +36,15 @@ export interface ApprovalPayload {
   signer: string;
   ts: number;
   digest: string;
+  /** Unique id for this approval, covered by the MAC so it cannot be swapped. */
+  jti: string;
+}
+
+/** Random id for a single approval. */
+export function newJti(): string {
+  const b = new Uint8Array(16);
+  crypto.getRandomValues(b);
+  return Array.from(b).map((x) => x.toString(16).padStart(2, "0")).join("");
 }
 
 /** Digest of the submission being attested to. */

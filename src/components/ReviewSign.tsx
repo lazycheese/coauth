@@ -1,8 +1,6 @@
 import { useState } from "react";
 import { useCoAuth } from "../store/coauthStore";
-import { tools } from "../mcp/registerTools";
-
-const submitTool = () => tools.find((t) => t.name === "submit")!;
+import { humanActions } from "../app/actions";
 
 export function ReviewSign() {
   const validation = useCoAuth((s) => s.validation);
@@ -37,7 +35,7 @@ export function ReviewSign() {
   };
   const onSubmit = () => {
     // The tool logs the call itself, attributed to the human initiator.
-    submitTool().execute({}, { actor: "human" });
+    humanActions.submit();
   };
 
   return (

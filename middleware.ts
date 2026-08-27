@@ -62,7 +62,7 @@ const KNOWN = new Set([
   "/about", "/about.html", "/contact", "/contact.html",
   "/privacy", "/privacy.html", "/developers", "/developers.html", "/terms", "/terms.html",
   "/og.svg", "/robots.txt", "/sitemap.xml", "/llms.txt", "/llms-full.txt",
-  "/AGENTS.md", "/openapi.json", "/.nojekyll", "/.well-known/agents.json",
+  "/AGENTS.md", "/openapi.json", "/.well-known/agents.json",
   "/.well-known/mcp",
 ]);
 

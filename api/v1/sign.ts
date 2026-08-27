@@ -1,4 +1,4 @@
-import { signingSecret, digestOf, mint, type ApprovalPayload } from "../_sign";
+import { signingSecret, digestOf, mint, newJti, type ApprovalPayload } from "../_sign";
 
 export const config = { runtime: "edge" };
 
@@ -60,6 +60,7 @@ export default async function handler(req: Request): Promise<Response> {
     signer,
     ts: Date.now(),
     digest: await digestOf(secret, payer, formFields),
+    jti: newJti(),
   };
   const mac = await mint(secret, payload);
 

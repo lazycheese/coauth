@@ -30,11 +30,12 @@ WebMCP and true human+agent collaboration are for.
   `blocked` until the clinician signs. The agent physically cannot bypass the
   human.
 
-## The 12 WebMCP tools
+## The 13 WebMCP tools
 
 | Tool | Kind | Purpose |
 |---|---|---|
 | `get_workflow_guidance` | read | The site teaches the agent the correct sequence + safety rules |
+| `get_submission_state` | read | Read the whole current submission, provenance and gate status |
 | `load_patient_context` | read | Load a structured patient record |
 | `check_payer_rules` | read | Fetch the payer's required fields and policy |
 | `fill_field` | write | Set one form field (typed, sourced from the record) |

@@ -63,9 +63,5 @@ function devApi(): Plugin {
 }
 
 export default defineConfig({
-  // GitHub Pages serves from /<repo>/; Vercel and local serve from root.
-  base: process.env.GITHUB_PAGES ? "/coauth/" : "/",
-  // On static hosts (Pages) there is no /api - tools use the in-bundle seed directly.
-  define: { __STATIC_HOST__: JSON.stringify(!!process.env.GITHUB_PAGES) },
   plugins: [react(), devApi()],
 });

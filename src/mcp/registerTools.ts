@@ -3,9 +3,6 @@ import { docs as seedDocs, getPatient, getPayerRules, resolveSourceValue } from 
 import { draftFor, draftAppeal } from "../rules/drafts";
 import { schemas } from "./schemas";
 
-declare const __STATIC_HOST__: boolean;
-const STATIC_HOST = typeof __STATIC_HOST__ !== "undefined" && __STATIC_HOST__;
-
 type ToolResult = Record<string, unknown>;
 
 /** Who initiated this call. WebMCP runtimes pass no context, so an agent call
@@ -21,6 +18,10 @@ interface ToolDef {
   description: string;
   inputSchema: unknown;
   readOnlyHint: boolean;
+  /** Changes state a person would care about; a runtime may confirm first. */
+  destructiveHint?: boolean;
+  /** Calling twice with the same input has the same effect as calling once. */
+  idempotentHint?: boolean;
   execute: Executor;
 }
 
@@ -45,52 +46,60 @@ export const tools: ToolDef[] = [
     inputSchema: schemas.load_patient_context,
     readOnlyHint: true,
     execute: async ({ patientId }, ctx?: ToolCtx) => {
-      // Prefer the API (Vercel); fall back to in-bundle seed (e.g. static hosting).
+      // Prefer the API; fall back to the in-bundle seed if it is unreachable.
       let patient: ReturnType<typeof getPatient> | undefined;
-      if (!STATIC_HOST) {
-        try {
-          const res = await fetch(`/api/patient/${encodeURIComponent(patientId)}`);
-          if (res.ok) patient = await res.json();
-        } catch {
-          /* no API - use local seed */
-        }
+      try {
+        const res = await fetch(`/api/v1/patient/${encodeURIComponent(patientId)}`);
+        if (res.ok) patient = await res.json();
+      } catch {
+        /* API unreachable - use local seed */
       }
       if (!patient) patient = getPatient(patientId);
       if (!patient) {
         store().setToast(`Patient “${patientId}” not found.`);
-        return { status: "error", reason: "patient not found" };
+        return { status: "error", summary: `No patient with id "${patientId}". Valid ids are listed in the tool schema.`, reason: "patient not found" };
       }
       store().setPatient(patient);
       store().setDocs(seedDocs);
       store().logActivity(actorOf(ctx), "load_patient_context", `${patient.name} (${patient.diagnoses?.[0]?.code})`);
-      return { status: "ok", patient: { name: patient.name, diagnosis: patient.diagnoses?.[0], medsTried: patient.medsTried } };
+      const dx = patient.diagnoses?.[0];
+      return {
+        status: "ok",
+        summary: `Loaded ${patient.name}: ${dx?.label} (${dx?.code}), ${patient.medsTried.length} prior therapy record(s), TB screen ${patient.clinical.tbScreen}.`,
+        patient: { name: patient.name, diagnosis: dx, medsTried: patient.medsTried, tbScreen: patient.clinical.tbScreen },
+      };
     },
   },
   {
     name: "check_payer_rules",
     title: "Check payer rules",
-    description: "Fetch the payer's required fields and rules for the requested drug.",
+    description: "Fetch a payer's required fields, coverage criteria and policy. Call this before filling anything: each payer asks for a different set of fields.",
     inputSchema: schemas.check_payer_rules,
     readOnlyHint: true,
     execute: async ({ payer }, ctx?: ToolCtx) => {
       let rules: ReturnType<typeof getPayerRules> | undefined;
-      if (!STATIC_HOST) {
-        try {
-          const res = await fetch(`/api/payer-rules?payer=${encodeURIComponent(payer)}`);
-          if (res.ok) rules = await res.json();
-        } catch {
-          /* no API - use local seed */
-        }
+      try {
+        const res = await fetch(`/api/v1/payer-rules?payer=${encodeURIComponent(payer)}`);
+        if (res.ok) rules = await res.json();
+      } catch {
+        /* API unreachable - use local seed */
       }
       if (!rules) rules = getPayerRules(payer);
       if (!rules) {
         store().setToast(`Payer “${payer}” not found.`);
-        return { status: "error", reason: "payer not found" };
+        return { status: "error", summary: `No payer with id "${payer}". Valid ids are listed in the tool schema.`, reason: "payer not found" };
       }
       store().setPayerRules(rules);
       store().runValidation();
       store().logActivity(actorOf(ctx), "check_payer_rules", `${rules.name}: ${rules.requiredFields.length} required fields`);
-      return { status: "ok", payer: rules.name, requiredFields: rules.requiredFields.map((f: any) => ({ id: f.id, label: f.label, requiresHumanJudgment: !!f.requiresHumanJudgment })) };
+      const judgment = rules.requiredFields.filter((f: any) => f.requiresHumanJudgment);
+      return {
+        status: "ok",
+        summary: `${rules.name} requires ${rules.requiredFields.length} fields for ${rules.drug}; ${judgment.length} of them need clinician judgment and must not be filled by an agent. Criteria: ${rules.criteria.minDmardCount} DMARD(s) for ${rules.criteria.minDmardMonths}+ months${rules.criteria.requiresSpecialist ? ", specialist attestation required" : ""}.`,
+        payer: rules.name,
+        criteria: rules.criteria,
+        requiredFields: rules.requiredFields.map((f: any) => ({ id: f.id, label: f.label, requiresHumanJudgment: !!f.requiresHumanJudgment })),
+      };
     },
   },
   {
@@ -99,6 +108,8 @@ export const tools: ToolDef[] = [
     description: "Set the value of one required field. Do not fill fields that require human judgment.",
     inputSchema: schemas.fill_field,
     readOnlyHint: false,
+    destructiveHint: false,
+    idempotentHint: true,
     execute: ({ fieldId, value }, ctx?: ToolCtx) => {
       store().setField(fieldId, value);
       const src = store().payerRules?.requiredFields.find((f) => f.id === fieldId)?.source;
@@ -108,7 +119,12 @@ export const tools: ToolDef[] = [
       store().setProvenance(fieldId, { by: "agent", source: src, verified });
       const v = store().runValidation();
       store().logActivity(actorOf(ctx), "fill_field", `${fieldId} = ${String(value).slice(0, 40)}`);
-      return { status: "ok", fieldId, source: src, verifiedAgainstRecord: verified, validation: summarize(v) };
+      const miss = Math.max(0, v.failCount - v.invalidCount);
+      return {
+        status: "ok",
+        summary: `Set ${fieldId}${verified ? " (matches the chart)" : ""}. ${miss} field(s) still missing, ${v.invalidCount} invalid, ${v.judgmentCount} awaiting clinician.`,
+        fieldId, source: src, verifiedAgainstRecord: verified, validation: summarize(v),
+      };
     },
   },
   {
@@ -117,12 +133,18 @@ export const tools: ToolDef[] = [
     description: "Link a clinical document to a field that requires supporting evidence.",
     inputSchema: schemas.attach_evidence,
     readOnlyHint: false,
+    destructiveHint: false,
+    idempotentHint: true,
     execute: ({ fieldId, docId }, ctx?: ToolCtx) => {
       store().attach(fieldId, docId);
       store().setProvenance(fieldId, { by: "agent", source: "attached document" });
       const v = store().runValidation();
       store().logActivity(actorOf(ctx), "attach_evidence", `${docId} -> ${fieldId}`);
-      return { status: "ok", fieldId, docId, validation: summarize(v) };
+      return {
+        status: "ok",
+        summary: `Attached ${docId} to ${fieldId}. ${v.failCount} requirement(s) outstanding.`,
+        fieldId, docId, validation: summarize(v),
+      };
     },
   },
   {
@@ -134,7 +156,14 @@ export const tools: ToolDef[] = [
     execute: (_input: unknown, ctx?: ToolCtx) => {
       const v = store().runValidation();
       store().logActivity(actorOf(ctx), "validate_submission", `${v.failCount} missing, ${v.judgmentCount} need clinician`);
-      return { status: "ok", validation: summarize(v) };
+      const miss = Math.max(0, v.failCount - v.invalidCount);
+      return {
+        status: "ok",
+        summary: v.clearForSignature
+          ? `All payer requirements are met; ${v.judgmentCount} clinician judgment item(s) remain before signature.`
+          : `Not ready: ${miss} missing, ${v.invalidCount} invalid, ${v.judgmentCount} awaiting clinician judgment.`,
+        validation: summarize(v),
+      };
     },
   },
   {
@@ -164,7 +193,52 @@ export const tools: ToolDef[] = [
         safety: { writeToolsChangeState: true, submitRequiresHumanSignature: true },
       };
       store().logActivity(actorOf(ctx), "get_workflow_guidance", "Read recommended workflow & safety rules");
-      return { status: "ok", guidance };
+      return {
+        status: "ok",
+        summary: "Recommended order: get_workflow_guidance, load_patient_context, check_payer_rules, fill_field for each non-judgment field, attach_evidence, detect_conflicts, assess_denial_risk, draft_field, validate_submission, submit. Never fill a clinician-judgment field, never resolve a critical conflict, and expect submit to be blocked until the clinician signs.",
+        guidance,
+      };
+    },
+  },
+  {
+    name: "get_submission_state",
+    title: "Get submission state",
+    description: "Read the whole current workspace: the loaded patient, the payer, every field value with who set it, outstanding conflicts, the denial-risk score, and whether the clinician has signed. Call this after reconnecting, or at any point you are unsure what has already been done.",
+    inputSchema: schemas.get_submission_state,
+    readOnlyHint: true,
+    execute: (_input: unknown, ctx?: ToolCtx) => {
+      const s = store();
+      if (!s.patient && !s.payerRules) {
+        return { status: "ok", summary: "No prior authorization has been started yet.", started: false };
+      }
+      const v = s.runValidation();
+      const fields = (s.payerRules?.requiredFields ?? []).map((f) => {
+        const prov = s.provenance[f.id];
+        return {
+          fieldId: f.id,
+          label: f.label,
+          value: s.formFields[f.id] ?? null,
+          filled: !!String(s.formFields[f.id] ?? "").trim(),
+          setBy: prov?.by ?? null,
+          verifiedAgainstRecord: prov?.verified ?? false,
+          requiresHumanJudgment: !!f.requiresHumanJudgment,
+        };
+      });
+      const unresolvedCritical = s.conflicts.filter((c) => c.requiresHumanOverride && !s.overrides[c.id]);
+      const signed = !!s.approvalToken;
+      s.logActivity(actorOf(ctx), "get_submission_state", `${fields.filter((f) => f.filled).length}/${fields.length} fields filled`);
+      return {
+        status: "ok",
+        summary: `${s.patient?.name ?? "No patient"} / ${s.payerRules?.name ?? "no payer"}: ${fields.filter((f) => f.filled).length} of ${fields.length} fields filled, ${s.conflicts.length} conflict(s) (${unresolvedCritical.length} needing a clinician override), denial risk ${s.risk?.score ?? "unknown"}%. Clinician signature: ${signed ? "on file" : "not yet given, so submit will be blocked"}.`,
+        started: true,
+        patient: s.patient ? { id: s.patient.id, name: s.patient.name } : null,
+        payer: s.payerRules ? { id: s.payerRules.id, name: s.payerRules.name } : null,
+        fields,
+        conflicts: s.conflicts.map((c) => ({ id: c.id, label: c.label, requiresHumanOverride: c.requiresHumanOverride, overridden: !!s.overrides[c.id] })),
+        risk: s.risk,
+        validation: summarize(v),
+        signature: { present: signed, serverVerified: s.approvalToken?.serverVerified ?? false, signer: s.approvalToken?.signer ?? null },
+      };
     },
   },
   {
@@ -177,7 +251,13 @@ export const tools: ToolDef[] = [
       store().runValidation();
       const r = store().risk;
       store().logActivity(actorOf(ctx), "assess_denial_risk", r ? `${r.score}% denial risk (${r.band})` : "no data");
-      return { status: "ok", risk: r };
+      return {
+        status: "ok",
+        summary: r
+          ? `Denial risk ${r.score}% (${r.band}). Drivers: ${r.factors.map((f) => f.label).join("; ") || "none"}.`
+          : "No submission loaded yet.",
+        risk: r,
+      };
     },
   },
   {
@@ -191,7 +271,13 @@ export const tools: ToolDef[] = [
       const conflicts = store().conflicts;
       const critical = conflicts.filter((c) => c.requiresHumanOverride).length;
       store().logActivity(actorOf(ctx), "detect_conflicts", conflicts.length ? `${conflicts.length} found (${critical} need clinician override)` : "none");
-      return { status: "ok", conflicts, requiresHumanOverride: critical > 0 };
+      return {
+        status: "ok",
+        summary: conflicts.length
+          ? `${conflicts.length} conflict(s): ${conflicts.map((c) => c.label).join("; ")}. ${critical} require a clinician override that an agent must not supply.`
+          : "No clinical or coverage conflicts found in this submission.",
+        conflicts, requiresHumanOverride: critical > 0,
+      };
     },
   },
   {
@@ -207,7 +293,11 @@ export const tools: ToolDef[] = [
       if (!letter) return { status: "error", reason: "load patient and payer first" };
       s.setAppealDraft(letter);
       s.logActivity(actorOf(ctx), "draft_appeal", "Drafted appeal letter (awaiting clinician review)");
-      return { status: "ok", letter, note: "Draft only - clinician must review & sign." };
+      return {
+        status: "ok",
+        summary: "Drafted an appeal letter from the record and the payer policy. It is a draft: a clinician must review and sign it before it is sent.",
+        letter, note: "Draft only - clinician must review & sign.",
+      };
     },
   },
   {
@@ -221,7 +311,11 @@ export const tools: ToolDef[] = [
       if (!draft) return { status: "error", reason: "no draft available for this field" };
       store().setSuggestion(fieldId, draft);
       store().logActivity(actorOf(ctx), "draft_field", `Proposed draft for ${fieldId} (awaiting clinician review)`);
-      return { status: "ok", fieldId, draft, note: "Suggestion only - requires clinician acceptance." };
+      return {
+        status: "ok",
+        summary: `Proposed draft text for ${fieldId}. It is a suggestion only: the field stays unfilled until the clinician accepts it.`,
+        fieldId, draft, note: "Suggestion only - requires clinician acceptance.",
+      };
     },
   },
   {
@@ -230,10 +324,12 @@ export const tools: ToolDef[] = [
     description: "Mark a field as needing clinician input; surfaces it in the review queue.",
     inputSchema: schemas.flag_for_human,
     readOnlyHint: false,
+    destructiveHint: false,
+    idempotentHint: true,
     execute: ({ fieldId, reason }, ctx?: ToolCtx) => {
       store().addFlag(fieldId, reason);
       store().logActivity(actorOf(ctx), "flag_for_human", `${fieldId}: ${reason}`);
-      return { status: "ok", fieldId, reason };
+      return { status: "ok", summary: `Flagged ${fieldId} for the clinician: ${reason}`, fieldId, reason };
     },
   },
   {
@@ -242,22 +338,31 @@ export const tools: ToolDef[] = [
     description: "Submit the completed prior authorization. Requires a human clinician signature first.",
     inputSchema: schemas.submit,
     readOnlyHint: false,
+    destructiveHint: true,
+    idempotentHint: false,
     execute: async (_input: unknown, ctx?: ToolCtx) => {
       const s = store();
       const v = s.runValidation();
       const unresolvedCritical = s.conflicts.filter((c) => c.requiresHumanOverride && !s.overrides[c.id]);
       if (unresolvedCritical.length) {
         s.logActivity(actorOf(ctx), "submit", `BLOCKED - ${unresolvedCritical.length} critical conflict(s) need clinician override`);
-        const blocked = { status: "blocked", reason: "Critical clinical conflict requires clinician override before submission.", conflicts: unresolvedCritical };
+        const blocked = {
+          status: "blocked",
+          summary: `Submission blocked: ${unresolvedCritical.map((c) => c.label).join("; ")}. A clinician must record an override. Do not attempt to resolve this yourself; report it to the clinician.`,
+          reason: "Critical clinical conflict requires clinician override before submission.",
+          conflicts: unresolvedCritical,
+        };
         s.setSubmitResult({ status: "blocked", reason: blocked.reason });
         return blocked;
       }
       if (!s.approvalToken) {
         s.logActivity(actorOf(ctx), "submit", "BLOCKED - awaiting human signature");
+        const pending = summarize(v)?.pending ?? [];
         const blocked = {
           status: "blocked",
+          summary: `Submission blocked: no clinician signature on file.${pending.length ? ` Still outstanding: ${pending.map((p) => p.label).join("; ")}.` : ""} Ask the clinician to review and sign; an agent cannot sign on their behalf.`,
           reason: "Human clinician signature required before submission.",
-          pending: summarize(v)?.pending ?? [],
+          pending,
         };
         s.setSubmitResult({ status: "blocked", reason: blocked.reason });
         return blocked;
@@ -267,7 +372,8 @@ export const tools: ToolDef[] = [
       // exact submission is rejected there, not here.
       let confirmationId: string;
       let verifiedBy: "server" | "client-only" = "client-only";
-      if (!STATIC_HOST && s.approvalToken.serverVerified) {
+      let replayProtection: "durable" | "best-effort" | "none" = "none";
+      if (s.approvalToken.serverVerified) {
         let verdict: any;
         try {
           const res = await fetch("/api/v1/submit", {
@@ -282,22 +388,23 @@ export const tools: ToolDef[] = [
           verdict = await res.json();
         } catch {
           s.logActivity(actorOf(ctx), "submit", "BLOCKED - signing service unreachable");
-          const blocked = { status: "blocked", reason: "Could not reach the signing service to verify the clinician approval." };
+          const blocked = { status: "blocked", summary: "Submission blocked: the signing service could not be reached to verify the clinician approval. Retry shortly.", reason: "Could not reach the signing service to verify the clinician approval." };
           s.setSubmitResult(blocked);
           return blocked;
         }
         if (verdict?.status !== "submitted") {
           const reason = verdict?.error?.message ?? "The signing service rejected this submission.";
           s.logActivity(actorOf(ctx), "submit", `REJECTED - ${verdict?.error?.code ?? "invalid_approval"}`);
-          const blocked = { status: "blocked", reason, detail: verdict?.error };
+          const blocked = { status: "blocked", summary: `Submission rejected by the signing service: ${reason}`, reason, detail: verdict?.error };
           s.setSubmitResult({ status: "blocked", reason });
           return blocked;
         }
         confirmationId = verdict.confirmationId;
         verifiedBy = "server";
+        replayProtection = verdict.replayProtection ?? "best-effort";
       } else {
-        // No signing service on this deployment: the gate is advisory only and
-        // is reported as such rather than claimed as enforcement.
+        // The signing service was unreachable when this was signed, so the
+        // approval is advisory and is reported as such.
         confirmationId = "PA-" + s.approvalToken.hash.replace("sig_", "").toUpperCase();
       }
       s.auditLog[s.auditLog.length - 1] && (s.auditLog[s.auditLog.length - 1].confirmationId = confirmationId);
@@ -312,10 +419,34 @@ export const tools: ToolDef[] = [
         ts: s.approvalToken.ts,
       });
       s.logActivity(actorOf(ctx), "submit", `Submitted - ${confirmationId} (${verifiedBy})`);
-      return { status: "submitted", confirmationId, verifiedBy, auditId: s.approvalToken.digest ?? s.approvalToken.hash };
+      return {
+        status: "submitted",
+        summary: `Submitted to ${s.payerRules?.name ?? "the payer"}. Confirmation ${confirmationId}, signed by ${s.approvalToken.signer} and ${verifiedBy === "server" ? "verified by the server" : "recorded locally only"}.`,
+        confirmationId,
+        verifiedBy,
+        replayProtection,
+        auditId: s.approvalToken.digest ?? s.approvalToken.hash,
+      };
     },
   },
 ];
+
+/** Look up a tool by name. Returns undefined rather than throwing so callers
+ * can decide; use invokeTool for the common case. */
+export function findTool(name: string): ToolDef | undefined {
+  return tools.find((t) => t.name === name);
+}
+
+/** Invoke a tool by name. A missing tool is a programming error, so it fails
+ * loudly here instead of crashing a render through a non-null assertion. */
+export async function invokeTool(name: string, input: unknown = {}, ctx?: ToolCtx): Promise<ToolResult> {
+  const tool = findTool(name);
+  if (!tool) {
+    const known = tools.map((t) => t.name).join(", ");
+    throw new Error(`Unknown tool "${name}". Registered tools: ${known}`);
+  }
+  return tool.execute(input, ctx);
+}
 
 /** Resolve every WebMCP surface this browser might expose.
  * Spec migrated navigator.modelContext -> document.modelContext (Chrome 150),
@@ -337,11 +468,26 @@ export function registerTools() {
     title: t.title,
     description: t.description,
     inputSchema: t.inputSchema,
-    annotations: { readOnlyHint: t.readOnlyHint },
-    // WebMCP expects results as { content: [{type:'text', text}] }; wrap our JSON.
+    annotations: {
+      title: t.title,
+      readOnlyHint: t.readOnlyHint,
+      destructiveHint: t.destructiveHint ?? false,
+      idempotentHint: t.idempotentHint ?? t.readOnlyHint,
+      openWorldHint: false,
+    },
+    // Agents read content[0].text. Handing them raw JSON is worse for
+    // comprehension and costs more tokens than a sentence, so the summary goes
+    // in the text and the machine-readable object goes in structuredContent.
     execute: async (input: unknown) => {
       const result = await t.execute(input);
-      return { content: [{ type: "text", text: JSON.stringify(result) }], structuredContent: result };
+      const { summary, ...rest } = result as { summary?: string };
+      return {
+        content: [{ type: "text", text: summary ?? JSON.stringify(rest) }],
+        structuredContent: result,
+        isError: (result as { status?: string }).status === "error",
+        // "blocked" is a deliberate outcome, not a failure, so it is not
+        // flagged as an error; the summary tells the agent what to do next.
+      };
     },
   });
   let registered = 0;
@@ -360,22 +506,24 @@ export function registerTools() {
   }
   const expected = surfaces.length * tools.length;
   const fullyRegistered = expected > 0 && registered === expected;
-  const mirror: Record<string, Executor> = {};
-  for (const t of tools) mirror[t.name] = t.execute;
-  const w = window as any;
-  w.__coauth = w.__coauth || {};
-  // Assign props (do NOT spread - that would snapshot the `state` getter).
-  w.__coauth.tools = mirror;
-  // "Connected" means the runtime accepted every tool, not merely that a
-  // modelContext object exists. A partial registration is a failure.
-  w.__coauth.webmcp = fullyRegistered;
-  w.__coauth.surfaces = surfaces.length;
-  w.__coauth.registeredCount = registered;
-  w.__coauth.expectedCount = expected;
-  w.__coauth.registrationFailures = failures;
-  w.__coauth.toolCount = tools.length;
-  // Allow re-running registration (e.g. after a runtime attaches, or for verification).
-  w.__coauth._registerTools = registerTools;
+  // Development-only inspection surface. Production ships no handle to the
+  // store or to the tool executors: the app drives itself through the action
+  // layer, so nothing in the product depends on this existing.
+  if (import.meta.env.DEV) {
+    const mirror: Record<string, Executor> = {};
+    for (const t of tools) mirror[t.name] = t.execute;
+    const w = window as any;
+    w.__coauth = w.__coauth || {};
+    // Assign props (do NOT spread - that would snapshot the `state` getter).
+    w.__coauth.tools = mirror;
+    w.__coauth.webmcp = fullyRegistered;
+    w.__coauth.surfaces = surfaces.length;
+    w.__coauth.registeredCount = registered;
+    w.__coauth.expectedCount = expected;
+    w.__coauth.registrationFailures = failures;
+    w.__coauth.toolCount = tools.length;
+    w.__coauth._registerTools = registerTools;
+  }
   if (failures.length) {
     useCoAuth.getState().setToast(`WebMCP registration incomplete: ${failures.length} tool(s) rejected.`);
   }

@@ -8,11 +8,11 @@ import { Intro } from "./components/Intro";
 import { Toast } from "./components/Toast";
 import { CommandPalette } from "./components/CommandPalette";
 import { useCoAuth } from "./store/coauthStore";
+import { tools } from "./mcp/registerTools";
 import { runDemo, type DemoHandle } from "./demo/runner";
 
 function TopBar({ onCompare, onDemo, demoRunning }: { onCompare: () => void; onDemo: () => void; demoRunning: boolean }) {
-  const w = window as unknown as { __coauth?: { toolCount?: number } };
-  const toolCount = w.__coauth?.toolCount ?? 12;
+  const toolCount = tools.length;
   const webmcp = useCoAuth((s) => s.webmcpConnected);
   const payer = useCoAuth((s) => s.payerRules?.name);
   return (

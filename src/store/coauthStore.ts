@@ -30,6 +30,7 @@ export interface ApprovalToken {
   /** Present only for server-minted tokens; these are what submit verifies. */
   payer?: string;
   digest?: string;
+  jti?: string;
   mac?: string;
   /** False means no signing service was reachable, so the gate is advisory. */
   serverVerified: boolean;
@@ -113,9 +114,6 @@ interface CoAuthState {
   setSubmitResult: (r: CoAuthState["submitResult"]) => void;
   reset: () => void;
 }
-
-declare const __STATIC_HOST__: boolean;
-const STATIC_HOST = typeof __STATIC_HOST__ !== "undefined" && __STATIC_HOST__;
 
 let activitySeq = 0;
 
@@ -228,25 +226,23 @@ export const useCoAuth = create<CoAuthState>((set, get) => ({
 
     // Ask the signing service to mint the token. Only a server-minted token can
     // be verified at submit time, so this is what makes the gate real.
-    if (!STATIC_HOST) {
-      try {
-        const res = await fetch("/api/v1/sign", {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({
-            payer: s0.payerRules?.id ?? "",
-            formFields: s0.formFields,
-            attestation,
-            signer,
-          }),
-        });
-        if (res.ok) {
-          const { token: t } = await res.json();
-          token = { ...token, ts: t.ts, payer: t.payer, digest: t.digest, mac: t.mac, serverVerified: true };
-        }
-      } catch {
-        /* signing service unreachable; fall through to an advisory local token */
+    try {
+      const res = await fetch("/api/v1/sign", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          payer: s0.payerRules?.id ?? "",
+          formFields: s0.formFields,
+          attestation,
+          signer,
+        }),
+      });
+      if (res.ok) {
+        const { token: t } = await res.json();
+        token = { ...token, ts: t.ts, payer: t.payer, digest: t.digest, jti: t.jti, mac: t.mac, serverVerified: true };
       }
+    } catch {
+      /* signing service unreachable; fall through to an advisory local token */
     }
 
     set((s) => ({
@@ -284,11 +280,10 @@ export const useCoAuth = create<CoAuthState>((set, get) => ({
     }),
 }));
 
-// Debug handle for live Playwright verification.
-if (typeof window !== "undefined") {
-  (window as unknown as { __coauth: unknown }).__coauth = {
-    get state() {
-      return useCoAuth.getState();
-    },
-  };
+// Development-only inspection handle. Never shipped: exposing the live store on
+// window would hand any script in the page a way to set approval state.
+if (import.meta.env.DEV && typeof window !== "undefined") {
+  const w = window as any;
+  w.__coauth = w.__coauth || {};
+  Object.defineProperty(w.__coauth, "state", { get: () => useCoAuth.getState(), configurable: true });
 }

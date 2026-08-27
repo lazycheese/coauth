@@ -1,8 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useCoAuth } from "../store/coauthStore";
-import { tools } from "../mcp/registerTools";
-
-const draftAppealTool = () => tools.find((t) => t.name === "draft_appeal")!;
+import { humanActions } from "../app/actions";
 
 export function RiskMeter() {
   const risk = useCoAuth((s) => s.risk);
@@ -43,7 +41,7 @@ export function RiskMeter() {
       <div className="risk-band-row">
         <div className="risk-band">{band === "high" ? "High - likely denial" : band === "moderate" ? "Moderate" : "Low - likely approval"}</div>
         {band !== "low" && (
-          <button className="btn btn-mini appeal-btn" data-testid="draft-appeal-btn" onClick={() => draftAppealTool().execute({}, { actor: "human" })}>
+          <button className="btn btn-mini appeal-btn" data-testid="draft-appeal-btn" onClick={() => humanActions.draftAppeal()}>
             Draft appeal letter
           </button>
         )}

@@ -43,7 +43,7 @@ export function RiskMeter() {
       <div className="risk-band-row">
         <div className="risk-band">{band === "high" ? "High - likely denial" : band === "moderate" ? "Moderate" : "Low - likely approval"}</div>
         {band !== "low" && (
-          <button className="btn btn-mini appeal-btn" data-testid="draft-appeal-btn" onClick={() => draftAppealTool().execute({})}>
+          <button className="btn btn-mini appeal-btn" data-testid="draft-appeal-btn" onClick={() => draftAppealTool().execute({}, { actor: "human" })}>
             Draft appeal letter
           </button>
         )}

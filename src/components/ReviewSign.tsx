@@ -12,6 +12,8 @@ export function ReviewSign() {
   const sign = useCoAuth((s) => s.sign);
   const logActivity = useCoAuth((s) => s.logActivity);
   const [attested, setAttested] = useState(false);
+  const [signer, setSigner] = useState("");
+  const [signing, setSigning] = useState(false);
 
   const conflicts = useCoAuth((s) => s.conflicts);
   const overrides = useCoAuth((s) => s.overrides);
@@ -19,15 +21,23 @@ export function ReviewSign() {
 
   const judgmentPending = validation?.results.filter((r) => !r.ok && r.requiresHumanJudgment) ?? [];
   const missing = validation?.failCount ?? 0;
-  const canSign = missing === 0 && judgmentPending.length === 0 && unresolvedCritical.length === 0 && attested && !approvalToken;
+  // An attestation with no identifiable signer is not an approval.
+  const signerOk = signer.trim().length >= 3;
+  const canSign =
+    missing === 0 && judgmentPending.length === 0 && unresolvedCritical.length === 0 && attested && signerOk && !approvalToken && !signing;
 
-  const onSign = () => {
-    sign("I attest this prior authorization is clinically accurate.");
-    logActivity("human", "sign", "Clinician signed & attested");
+  const onSign = async () => {
+    setSigning(true);
+    try {
+      const token = await sign("I attest this prior authorization is clinically accurate.", signer.trim());
+      logActivity("human", "sign", `Signed by ${signer.trim()} (${token.serverVerified ? "server-verified" : "local only"})`);
+    } finally {
+      setSigning(false);
+    }
   };
   const onSubmit = () => {
-    logActivity("human", "submit", "Requested submission");
-    submitTool().execute({});
+    // The tool logs the call itself, attributed to the human initiator.
+    submitTool().execute({}, { actor: "human" });
   };
 
   return (
@@ -68,6 +78,17 @@ export function ReviewSign() {
 
       {!approvalToken ? (
         <>
+          <label className="signer-field">
+            <span>Signing clinician</span>
+            <input
+              type="text"
+              data-testid="signer-input"
+              placeholder="Name and credentials"
+              value={signer}
+              disabled={missing > 0 || judgmentPending.length > 0 || unresolvedCritical.length > 0}
+              onChange={(e) => setSigner(e.target.value)}
+            />
+          </label>
           <label className="attest">
             <input
               type="checkbox"
@@ -79,7 +100,7 @@ export function ReviewSign() {
             <span>I attest this prior authorization is clinically accurate.</span>
           </label>
           <button className="btn btn-primary" data-testid="approve-sign" disabled={!canSign} onClick={onSign}>
-            Approve &amp; Sign
+            {signing ? "Signing" : "Approve & Sign"}
           </button>
         </>
       ) : (
@@ -93,7 +114,13 @@ export function ReviewSign() {
           <p className="muted">Audit trail</p>
           {auditLog.map((a, i) => (
             <div className="audit-row" key={i}>
-              <span>{a.attestation}</span>
+              <span>
+                {a.signer ? `${a.signer}: ` : ""}
+                {a.attestation}
+              </span>
+              <span className={`audit-verify verify-${a.verifiedBy}`}>
+                {a.verifiedBy === "server" ? "signature verified by the server" : "local signature only, not server-verified"}
+              </span>
               <span className="muted">{a.hash}{a.confirmationId ? ` · ${a.confirmationId}` : ""}</span>
             </div>
           ))}

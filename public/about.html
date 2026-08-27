@@ -18,12 +18,13 @@
       click, CoAuth exposes the payer form as typed tools that the agent calls
       directly - filling fields, attaching evidence, scoring denial risk, and
       detecting clinical conflicts at machine speed.</p>
-    <p>The human stays firmly in control. The agent cannot fabricate
-      clinician-judgment fields, cannot resolve a critical clinical
-      contraindication, and cannot submit. Submission is architecturally gated
-      behind a clinician signature: the <code>submit</code> tool returns a
-      "blocked" status until a human reviews the work, attests to its accuracy,
-      and signs. This mirrors the legal reality that high-stakes clinical
+    <p>The human stays in control, and that is enforced rather than asserted.
+      The clinician signature is minted by the server over the exact submission
+      being attested to, using a secret the browser never sees. The API then
+      refuses any submission that is unsigned, that carries a forged token, or
+      whose fields changed after signing. An agent running in the page cannot
+      talk its way past that, because the check does not depend on anything the
+      caller can set. This mirrors the legal reality that high-stakes clinical
       decisions require accountable human oversight.</p>
     <p>Why it matters: up to 82% of denied prior authorizations are overturned on
       appeal. The clinical decision was rarely wrong - the paperwork was. CoAuth

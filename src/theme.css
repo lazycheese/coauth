@@ -320,3 +320,12 @@ body {
 .sev-tag { flex-shrink: 0; font-size: 9px; text-transform: uppercase; letter-spacing: .04em; font-weight: 700; padding: 2px 6px; border-radius: 3px; }
 .sev-tag-critical { background: #c0341d; color: #fff; }
 .sev-tag-high { background: #f0d29a; color: #7a4b00; }
+
+/* ---- Signer identity and approval verification ---- */
+.signer-field { display: flex; flex-direction: column; gap: 4px; margin-bottom: 10px; }
+.signer-field span { font-size: 11px; text-transform: uppercase; letter-spacing: .03em; color: var(--muted); }
+.signer-field input { font: inherit; font-size: 13px; padding: 7px 9px; border: 1px solid var(--line); border-radius: 6px; background: #fbfdff; }
+.signer-field input:disabled { background: #f2f4f7; cursor: not-allowed; }
+.audit-verify { font-size: 10px; text-transform: uppercase; letter-spacing: .03em; font-weight: 700; }
+.verify-server { color: #1c7a37; }
+.verify-client-only { color: #b7791f; }

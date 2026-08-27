@@ -4,13 +4,16 @@ import { tools } from "../mcp/registerTools";
 
 const tool = (name: string) => tools.find((t) => t.name === name)!;
 
+// Palette entries are clicked by a person, so they are logged as human actions.
+const HUMAN = { actor: "human" as const };
+
 interface Command {
   label: string;
   hint: string;
   run: () => void | Promise<void>;
 }
 
-/** Agent auto-fills every non-judgment field for the loaded patient. */
+/** Fills every non-judgment field for the loaded patient via the WebMCP tools. */
 async function autofill() {
   const s = useCoAuth.getState();
   const p = s.patient;
@@ -28,13 +31,13 @@ async function autofill() {
   for (const f of rules.requiredFields) {
     if (f.requiresHumanJudgment) continue;
     if (f.type === "evidence") {
-      await tool("attach_evidence").execute({ fieldId: f.id, docId: "doc-tb" });
+      await tool("attach_evidence").execute({ fieldId: f.id, docId: "doc-tb" }, HUMAN);
     } else if (map[f.id]) {
-      await tool("fill_field").execute({ fieldId: f.id, value: map[f.id] });
+      await tool("fill_field").execute({ fieldId: f.id, value: map[f.id] }, HUMAN);
     }
   }
-  await tool("detect_conflicts").execute({});
-  await tool("assess_denial_risk").execute({});
+  await tool("detect_conflicts").execute({}, HUMAN);
+  await tool("assess_denial_risk").execute({}, HUMAN);
 }
 
 export function CommandPalette() {
@@ -61,17 +64,17 @@ export function CommandPalette() {
 
   const commands: Command[] = useMemo(
     () => [
-      { label: "Load patient - Jane Doe (clean)", hint: "load_patient_context", run: () => tool("load_patient_context").execute({ patientId: "jane-doe" }) },
-      { label: "Load patient - Marcus Lee (denial risk)", hint: "load_patient_context", run: () => tool("load_patient_context").execute({ patientId: "marcus-lee" }) },
-      { label: "Payer - UnitedHealthcare", hint: "check_payer_rules", run: () => tool("check_payer_rules").execute({ payer: "uhc" }) },
-      { label: "Payer - Aetna", hint: "check_payer_rules", run: () => tool("check_payer_rules").execute({ payer: "aetna" }) },
-      { label: "Payer - Cigna", hint: "check_payer_rules", run: () => tool("check_payer_rules").execute({ payer: "cigna" }) },
-      { label: "Agent: auto-fill the form", hint: "fill_field ×N + checks", run: autofill },
-      { label: "Agent: assess denial risk", hint: "assess_denial_risk", run: () => tool("assess_denial_risk").execute({}) },
-      { label: "Agent: detect conflicts", hint: "detect_conflicts", run: () => tool("detect_conflicts").execute({}) },
-      { label: "Agent: draft medical necessity", hint: "draft_field", run: () => tool("draft_field").execute({ fieldId: "medical_necessity" }) },
-      { label: "Agent: draft appeal letter", hint: "draft_appeal", run: () => tool("draft_appeal").execute({}) },
-      { label: "Agent: attempt submit", hint: "submit (gated)", run: () => tool("submit").execute({}) },
+      { label: "Load patient - Jane Doe (clean)", hint: "load_patient_context", run: () => tool("load_patient_context").execute({ patientId: "jane-doe" }, HUMAN) },
+      { label: "Load patient - Marcus Lee (denial risk)", hint: "load_patient_context", run: () => tool("load_patient_context").execute({ patientId: "marcus-lee" }, HUMAN) },
+      { label: "Payer - UnitedHealthcare", hint: "check_payer_rules", run: () => tool("check_payer_rules").execute({ payer: "uhc" }, HUMAN) },
+      { label: "Payer - Aetna", hint: "check_payer_rules", run: () => tool("check_payer_rules").execute({ payer: "aetna" }, HUMAN) },
+      { label: "Payer - Cigna", hint: "check_payer_rules", run: () => tool("check_payer_rules").execute({ payer: "cigna" }, HUMAN) },
+      { label: "Run auto-fill the form", hint: "fill_field ×N + checks", run: autofill },
+      { label: "Run assess denial risk", hint: "assess_denial_risk", run: () => tool("assess_denial_risk").execute({}, HUMAN) },
+      { label: "Run detect conflicts", hint: "detect_conflicts", run: () => tool("detect_conflicts").execute({}, HUMAN) },
+      { label: "Run draft medical necessity", hint: "draft_field", run: () => tool("draft_field").execute({ fieldId: "medical_necessity" }, HUMAN) },
+      { label: "Run draft appeal letter", hint: "draft_appeal", run: () => tool("draft_appeal").execute({}, HUMAN) },
+      { label: "Run attempt submit", hint: "submit (gated)", run: () => tool("submit").execute({}, HUMAN) },
       { label: "Reset workspace", hint: "reset", run: () => reset() },
     ],
     [reset]

@@ -12,7 +12,7 @@ export function Intro({ onWatch, onClose }: { onWatch: () => void; onClose: () =
         </p>
         <ul className="intro-points">
           <li><strong>12 WebMCP tools.</strong> The agent calls typed functions instead of scraping the page.</li>
-          <li><strong>Human-gated submit.</strong> Without a clinician signature, the submit tool returns blocked.</li>
+          <li><strong>Server-verified signature.</strong> The API rejects any submission that is unsigned, forged, or edited after the clinician signed it.</li>
           <li><strong>Catches issues early.</strong> Contraindications, unmet step therapy, and a denial-risk score.</li>
         </ul>
         <div className="intro-actions">

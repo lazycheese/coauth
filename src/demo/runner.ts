@@ -64,8 +64,8 @@ export async function runDemo(setCaption: (c: string) => void, handle: DemoHandl
   store().runValidation();
   await wait(900);
 
-  await step("Risk drops. Requirements met. The clinician signs & attests.", () => {
-    store().sign("I attest this prior authorization is clinically accurate.");
+  await step("Risk drops. Requirements met. The clinician signs & attests.", async () => {
+    await store().sign("I attest this prior authorization is clinically accurate.", "Dr. A. Reyes, MD (demo)");
     store().logActivity("human", "sign", "Clinician signed & attested");
   }, 1400);
 

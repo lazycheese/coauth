@@ -6,6 +6,7 @@ function devApi(): Plugin {
   return {
     name: "dev-api",
     configureServer(server) {
+      process.env.COAUTH_SIGNING_SECRET ||= "dev-only-signing-secret-not-for-production";
       server.middlewares.use(async (req, res, next) => {
         const url = new URL(req.url ?? "", "http://localhost");
         if (!url.pathname.startsWith("/api/")) return next();
@@ -26,6 +27,24 @@ function devApi(): Plugin {
           if (path === "/api/payer-rules") {
             const r = h.payerRulesResult(url.searchParams.get("payer") ?? "");
             return send(r.status, r.body);
+          }
+          // Edge handlers that take a Request: run them as-is so dev matches prod.
+          if (path === "/api/sign" || path === "/api/submit") {
+            const mod = await server.ssrLoadModule(
+              path === "/api/sign" ? "/api/v1/sign.ts" : "/api/v1/submit.ts"
+            );
+            let raw = "";
+            for await (const c of req) raw += c;
+            const request = new Request("http://localhost" + url.pathname, {
+              method: req.method,
+              headers: { "content-type": "application/json" },
+              body: raw || undefined,
+            });
+            const out: Response = await mod.default(request);
+            res.statusCode = out.status;
+            res.setHeader("content-type", "application/json");
+            res.end(await out.text());
+            return;
           }
           if (path === "/api/validate") {
             let raw = "";

@@ -14,14 +14,25 @@ export interface ActivityEntry {
 export interface AuditEntry {
   ts: number;
   attestation: string;
+  signer: string;
   hash: string;
+  /** "server" when the signature was minted and checked by the API. */
+  verifiedBy: "server" | "client-only";
   confirmationId?: string;
 }
 
 export interface ApprovalToken {
   ts: number;
   attestation: string;
+  signer: string;
+  /** Local digest, shown in the audit trail. */
   hash: string;
+  /** Present only for server-minted tokens; these are what submit verifies. */
+  payer?: string;
+  digest?: string;
+  mac?: string;
+  /** False means no signing service was reachable, so the gate is advisory. */
+  serverVerified: boolean;
 }
 
 export interface Flag {
@@ -95,13 +106,16 @@ interface CoAuthState {
   setToast: (msg: string | null) => void;
   setWebmcpConnected: (v: boolean) => void;
   addFlag: (fieldId: string, reason: string) => void;
-  sign: (attestation: string) => ApprovalToken;
+  sign: (attestation: string, signer: string) => Promise<ApprovalToken>;
   clearApproval: () => void;
   logActivity: (actor: "agent" | "human", tool: string, summary: string) => void;
   setFocused: (fieldId: string | null) => void;
   setSubmitResult: (r: CoAuthState["submitResult"]) => void;
   reset: () => void;
 }
+
+declare const __STATIC_HOST__: boolean;
+const STATIC_HOST = typeof __STATIC_HOST__ !== "undefined" && __STATIC_HOST__;
 
 let activitySeq = 0;
 
@@ -159,7 +173,7 @@ export const useCoAuth = create<CoAuthState>((set, get) => ({
     const s = get();
     const summary = validate(s.formFields, s.payerRules);
     const risk = assessRisk(s.formFields, s.patient, s.payerRules, s.overrides);
-    const conflicts = detectConflicts(s.formFields, s.patient);
+    const conflicts = detectConflicts(s.formFields, s.patient, s.payerRules, s.overrides);
     set({ validation: summary, risk, conflicts });
     return summary;
   },
@@ -201,15 +215,52 @@ export const useCoAuth = create<CoAuthState>((set, get) => ({
       flags: [...s.flags.filter((f) => f.fieldId !== fieldId), { fieldId, reason }],
     })),
 
-  sign: (attestation) => {
-    const token: ApprovalToken = {
+  sign: async (attestation, signer) => {
+    const s0 = get();
+    const localHash = hashFields(s0.formFields);
+    let token: ApprovalToken = {
       ts: Date.now(),
       attestation,
-      hash: hashFields(get().formFields),
+      signer,
+      hash: localHash,
+      serverVerified: false,
     };
+
+    // Ask the signing service to mint the token. Only a server-minted token can
+    // be verified at submit time, so this is what makes the gate real.
+    if (!STATIC_HOST) {
+      try {
+        const res = await fetch("/api/v1/sign", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            payer: s0.payerRules?.id ?? "",
+            formFields: s0.formFields,
+            attestation,
+            signer,
+          }),
+        });
+        if (res.ok) {
+          const { token: t } = await res.json();
+          token = { ...token, ts: t.ts, payer: t.payer, digest: t.digest, mac: t.mac, serverVerified: true };
+        }
+      } catch {
+        /* signing service unreachable; fall through to an advisory local token */
+      }
+    }
+
     set((s) => ({
       approvalToken: token,
-      auditLog: [...s.auditLog, { ts: token.ts, attestation, hash: token.hash }],
+      auditLog: [
+        ...s.auditLog,
+        {
+          ts: token.ts,
+          attestation,
+          signer,
+          hash: token.digest ?? token.hash,
+          verifiedBy: token.serverVerified ? "server" : "client-only",
+        },
+      ],
       submitResult: null,
     }));
     return token;

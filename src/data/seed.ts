@@ -20,6 +20,12 @@ export interface PayerRules {
   drug: string;
   /** Human-readable coverage policy shown to the clinician. */
   policy: string[];
+  /** The same policy in machine-checkable form, evaluated against a submission. */
+  criteria: {
+    minDmardMonths: number;
+    minDmardCount: number;
+    requiresSpecialist: boolean;
+  };
   requiredFields: FieldDef[];
 }
 
@@ -47,6 +53,50 @@ export interface Patient {
 
 export const DRUG = "Humira (adalimumab)";
 export const HCPCS = "J0135";
+
+/** Coverage-relevant facts about a drug, used to check a submission against
+ * what was actually requested rather than against a hardcoded assumption. */
+export interface DrugSpec {
+  hcpcs: string;
+  name: string;
+  /** ICD-10 prefixes the drug is indicated for. */
+  indications: string[];
+  indicationLabel: string;
+  /** Plausible single-dose range in mg. */
+  doseMgRange: [number, number];
+  /** Biologics require documented TB screening before initiation. */
+  requiresTbScreen: boolean;
+}
+
+export const drugs: Record<string, DrugSpec> = {
+  J0135: {
+    hcpcs: "J0135",
+    name: "Adalimumab (Humira)",
+    indications: ["M05", "M06", "L40.5", "K50", "K51", "M45"],
+    indicationLabel: "rheumatoid arthritis, psoriatic arthritis, ankylosing spondylitis, or inflammatory bowel disease",
+    doseMgRange: [20, 80],
+    requiresTbScreen: true,
+  },
+  J1438: {
+    hcpcs: "J1438",
+    name: "Etanercept (Enbrel)",
+    indications: ["M05", "M06", "L40.5", "M45", "M08"],
+    indicationLabel: "rheumatoid arthritis, psoriatic arthritis, ankylosing spondylitis, or juvenile idiopathic arthritis",
+    doseMgRange: [25, 50],
+    requiresTbScreen: true,
+  },
+};
+
+export function getDrug(hcpcs: string | undefined): DrugSpec | undefined {
+  return hcpcs ? drugs[hcpcs.trim().toUpperCase()] : undefined;
+}
+
+/** Member-id prefix each payer issues, used to catch a mismatched member id. */
+export const payerMemberPrefix: Record<string, string> = {
+  uhc: "UHC-",
+  aetna: "AET-",
+  cigna: "CIG-",
+};
 
 export const patients: Record<string, Patient> = {
   "jane-doe": {
@@ -114,6 +164,7 @@ export const payers: Record<string, PayerRules> = {
       "Negative TB screening within 12 months prior to initiating a biologic.",
       "Prescriber attestation of medical necessity.",
     ],
+    criteria: { minDmardMonths: 3, minDmardCount: 1, requiresSpecialist: false },
     requiredFields: [
       ...baseFields,
       { id: "step_exception_rationale", label: "Step-therapy exception rationale", type: "longtext", requiresHumanJudgment: true },
@@ -130,6 +181,7 @@ export const payers: Record<string, PayerRules> = {
       "Negative TB screening required prior to biologic therapy.",
       "Statement of medical necessity from prescriber.",
     ],
+    criteria: { minDmardMonths: 3, minDmardCount: 1, requiresSpecialist: false },
     requiredFields: [
       ...baseFields,
       { id: "medical_necessity", label: "Statement of medical necessity", type: "longtext", requiresHumanJudgment: true },
@@ -146,6 +198,7 @@ export const payers: Record<string, PayerRules> = {
       "Negative TB screening within 6 months.",
       "Statement of medical necessity.",
     ],
+    criteria: { minDmardMonths: 3, minDmardCount: 2, requiresSpecialist: true },
     requiredFields: [
       ...baseFields,
       { id: "specialist_attestation", label: "Rheumatology specialist attestation", type: "select", options: ["Rheumatologist", "Consulted rheumatology", "Neither"], requiresHumanJudgment: true },

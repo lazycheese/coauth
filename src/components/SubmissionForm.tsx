@@ -111,17 +111,31 @@ function FieldRow({ field, flash }: { field: FieldDef; flash: boolean }) {
 function ValidationBar() {
   const v = useCoAuth((s) => s.validation);
   const fail = v?.failCount ?? 0;
+  const invalid = v?.invalidCount ?? 0;
+  // failCount includes filled-but-invalid fields; a wrong code is not "missing".
+  const missing = Math.max(0, fail - invalid);
   const judgment = v?.judgmentCount ?? 0;
   const issues = fail + judgment;
   const tone = fail > 0 ? "red" : judgment > 0 ? "amber" : "green";
+  const parts = [
+    missing > 0 ? `${missing} missing` : "",
+    invalid > 0 ? `${invalid} invalid` : "",
+    judgment > 0 ? `${judgment} need clinician judgment` : "",
+  ].filter(Boolean);
   return (
-    <div className={`validation-bar tone-${tone}`} data-testid="validation-bar" data-issues={issues}>
+    <div
+      className={`validation-bar tone-${tone}`}
+      data-testid="validation-bar"
+      data-issues={issues}
+      data-missing={missing}
+      data-invalid={invalid}
+    >
       {issues === 0 ? (
         <strong>All requirements met - ready for clinician signature</strong>
       ) : (
         <>
           <strong>{issues} open</strong>
-          <span>{fail} missing · {judgment} need clinician judgment</span>
+          <span>{parts.join(" · ")}</span>
         </>
       )}
     </div>

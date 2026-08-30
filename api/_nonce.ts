@@ -55,13 +55,25 @@ export async function claimOnce(jti: string, confirmationId: string, ttlMs: numb
   const key = `coauth:approval:${jti}`;
   const ttlSeconds = Math.ceil(ttlMs / 1000);
   try {
-    // SET key value NX EX ttl - atomic, so two concurrent submits cannot both win.
-    const res = await fetch(`${url}/set/${encodeURIComponent(key)}/${encodeURIComponent(confirmationId)}?NX=true&EX=${ttlSeconds}`, {
-      headers: { Authorization: `Bearer ${token}` },
-    });
+    // SET key value EX ttl NX - atomic, so two concurrent submits cannot both
+    // win. The arguments are path segments, not query parameters: sent as
+    // ?NX=true&EX=n the store answers "ERR syntax error", which the old code
+    // read as "not OK, therefore already claimed" and used to reject every
+    // submission on the deployment.
+    const res = await fetch(
+      `${url}/set/${encodeURIComponent(key)}/${encodeURIComponent(confirmationId)}/EX/${ttlSeconds}/NX`,
+      { headers: { Authorization: `Bearer ${token}` } }
+    );
     const body = await res.json();
+
+    // An error from the store is not an answer about this approval. Treating it
+    // as one turns an outage into a blanket refusal; fall back to per-instance
+    // memory and report the weaker protection, as when the store is absent.
+    if (!res.ok || body?.error) return localClaim(jti, confirmationId, ttlMs);
+
     if (body?.result === "OK") return { fresh: true, protection: "durable" };
 
+    // result null means the key already existed: this approval has been used.
     const prior = await fetch(`${url}/get/${encodeURIComponent(key)}`, {
       headers: { Authorization: `Bearer ${token}` },
     });

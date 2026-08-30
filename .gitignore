@@ -14,3 +14,5 @@ coauth-*.png
 
 .vercel
 .env*
+# Vercel marketplace tooling artefact, not product code
+skills-lock.json

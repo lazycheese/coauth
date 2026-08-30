@@ -51,7 +51,9 @@ async function kvHit(key: string, limit: number, windowMs: number): Promise<Rate
     const res = await fetch(`${url}/incr/${encodeURIComponent(key)}`, {
       headers: { Authorization: `Bearer ${token}` },
     });
-    const count = Number((await res.json())?.result ?? 0);
+    const incr = await res.json();
+    if (!res.ok || incr?.error) return localHit(key, limit, windowMs);
+    const count = Number(incr?.result ?? 0);
     if (count === 1) {
       // First hit in this window: give the counter the window's lifetime.
       await fetch(`${url}/expire/${encodeURIComponent(key)}/${seconds}`, {
@@ -67,19 +69,31 @@ async function kvHit(key: string, limit: number, windowMs: number): Promise<Rate
   }
 }
 
-/** Best available identifier for the caller. Spoofable, which is why the
- *  global window exists alongside the per-caller one. */
+/** Best available identifier for the caller.
+ *
+ * Order matters, and getting it wrong makes the limit decorative. A client can
+ * send its own X-Forwarded-For, and the platform appends rather than replaces -
+ * so reading the FIRST entry meant an attacker could rotate that header and
+ * mint a fresh budget per request. The platform's own header comes first here,
+ * and the fallback takes the LAST entry of X-Forwarded-For, which is the hop
+ * closest to the edge and the only one the caller cannot choose.
+ *
+ * The global window exists because none of this is perfect: an attacker with
+ * real addresses to spend still gets a budget per address. */
 export function callerKey(req: Request): string {
-  const fwd = req.headers.get("x-forwarded-for") ?? "";
-  return (fwd.split(",")[0] || req.headers.get("x-real-ip") || "unknown").trim();
+  const platform = req.headers.get("x-vercel-forwarded-for") ?? req.headers.get("x-real-ip");
+  if (platform) return platform.trim();
+  const chain = (req.headers.get("x-forwarded-for") ?? "").split(",").map((s) => s.trim()).filter(Boolean);
+  return chain.length ? chain[chain.length - 1] : "unknown";
 }
 
-const WINDOW_MS = 15 * 60 * 1000;
-// Two per minute sustained. Tight enough that guessing a passphrase is
-// hopeless, loose enough that a person fumbling their credentials, or a
-// verification run exercising several sign-ins, is never caught by it.
-const PER_CALLER = 30;
-const GLOBAL = 200;
+// Four per minute sustained, over a short window so an honest caller who does
+// trip it is not locked out for long. Guessing a passphrase at this rate is
+// hopeless; a person fumbling their credentials, or a verification run doing a
+// handful of sign-ins, never reaches it.
+const WINDOW_MS = 5 * 60 * 1000;
+const PER_CALLER = 20;
+const GLOBAL = 300;
 
 /** Check and consume a login attempt. */
 export async function rateLimitLogin(req: Request): Promise<RateVerdict> {

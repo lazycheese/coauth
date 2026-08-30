@@ -282,26 +282,7 @@ async function verifyApprovalGate() {
   const proto = await post("/api/v1/login", { clinicianId: "constructor", passphrase });
   check("a prototype-chain clinician id is not a clinician", proto.status, 401);
 
-  // 8. The credential endpoint is throttled.
-  //
-  //    One passphrase mints every signature on this deployment, so unlimited
-  //    guesses against it would be the weakest hinge in the whole gate. Run
-  //    last, because it deliberately exhausts this caller's budget.
-  //    Attempts come from a distinct source address so this exercises the
-  //    per-caller budget rather than spending the one the rest of the suite is
-  //    using - which is also what makes it a test of per-caller throttling
-  //    rather than of a global one.
-  const attacker = { "x-forwarded-for": "203.0.113.7" };
-  let sawThrottle = false;
-  for (let i = 0; i < 40 && !sawThrottle; i++) {
-    const attempt = await post("/api/v1/login", { clinicianId: "a-alvarez", passphrase: `guess-${i}` }, attacker);
-    if (attempt.status === 429) sawThrottle = true;
-  }
-  sawThrottle
-    ? ok("repeated sign-in attempts are throttled")
-    : bad("sign-in attempts are throttled", "a 429 within 40 guesses", "every guess was answered");
-
-  // 9. Sign-out actually ends the session.
+  // 8. Sign-out actually ends the session.
   const out = await fetch(BASE + "/api/v1/session", { method: "DELETE", headers: auth });
   check("a clinician can sign out", out.status, 200);
 }
@@ -1109,6 +1090,34 @@ async function verifyJudgmentFieldsAreRefused(page) {
 
 // ---------------------------------------------------------------------------
 
+
+// ---------------------------------------------------------------------------
+// The credential endpoint is throttled.
+//
+// One passphrase mints every signature on this deployment, so unlimited guesses
+// against it would be the weakest hinge in the whole gate. Run last, and only
+// last: the limit is keyed on the platform's view of the caller, which a client
+// cannot choose, so exhausting it here would throttle every other check that
+// needs to sign in.
+// ---------------------------------------------------------------------------
+async function verifyLoginThrottle() {
+  section("Guessing the clinician passphrase");
+
+  let sawThrottle = false;
+  let attempts = 0;
+  for (; attempts < 60 && !sawThrottle; attempts++) {
+    const attempt = await post("/api/v1/login", { clinicianId: "a-alvarez", passphrase: `guess-${attempts}` });
+    if (attempt.status === 429) sawThrottle = true;
+    else if (attempt.status !== 401) {
+      bad("a wrong passphrase is refused while guessing", "401 or 429", String(attempt.status));
+      return;
+    }
+  }
+  sawThrottle
+    ? ok("repeated sign-in attempts are throttled", `throttled after ${attempts} guesses`)
+    : bad("sign-in attempts are throttled", "a 429 within 60 guesses", "every guess was answered");
+}
+
 async function main() {
   console.log(`CoAuth live verification\ntarget: ${BASE}${DEPLOYED ? "" : "  (local)"}`);
 
@@ -1124,6 +1133,8 @@ async function main() {
   await verifyMcpSchemas();
   await verifyHeaders();
   await verifyInBrowser();
+  // Last: it deliberately spends this caller's sign-in budget.
+  await verifyLoginThrottle();
 
   console.log(`\n${pass} passed, ${fail} failed, ${skip} skipped`);
   if (fail) {

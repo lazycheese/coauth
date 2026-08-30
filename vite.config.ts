@@ -7,6 +7,10 @@ function devApi(): Plugin {
     name: "dev-api",
     configureServer(server) {
       process.env.COAUTH_SIGNING_SECRET ||= "dev-only-signing-secret-not-for-production";
+      // Local development gets a known passphrase so the flow is walkable; a
+      // deployment must set its own or it cannot authenticate anyone, which
+      // means it cannot sign and cannot submit.
+      process.env.COAUTH_CLINICIAN_PASSPHRASE ||= "dev-only-clinician-passphrase";
       server.middlewares.use(async (req, res, next) => {
         const url = new URL(req.url ?? "", "http://localhost");
         const isMcp = url.pathname === "/.well-known/mcp";
@@ -47,21 +51,29 @@ function devApi(): Plugin {
             const r = h.payerRulesResult(url.searchParams.get("payer") ?? "");
             return send(r.status, r.body);
           }
-          // Edge handlers that take a Request: run them as-is so dev matches prod.
-          if (path === "/api/sign" || path === "/api/submit") {
-            const mod = await server.ssrLoadModule(
-              path === "/api/sign" ? "/api/v1/sign.ts" : "/api/v1/submit.ts"
-            );
+          // Edge handlers that take a Request: run them as-is so dev matches
+          // prod. Every header is forwarded, cookies included, because the
+          // signing route reads the clinician session off one.
+          const EDGE: Record<string, string> = {
+            "/api/sign": "/api/v1/sign.ts",
+            "/api/submit": "/api/v1/submit.ts",
+            "/api/login": "/api/v1/login.ts",
+            "/api/session": "/api/v1/session.ts",
+          };
+          if (EDGE[path]) {
+            const mod = await server.ssrLoadModule(EDGE[path]);
             let raw = "";
             for await (const c of req) raw += c;
+            const headers: Record<string, string> = {};
+            for (const [k, v] of Object.entries(req.headers)) if (typeof v === "string") headers[k] = v;
             const request = new Request("http://localhost" + url.pathname, {
               method: req.method,
-              headers: { "content-type": "application/json" },
-              body: raw || undefined,
+              headers,
+              body: req.method === "GET" || req.method === "DELETE" ? undefined : raw || undefined,
             });
             const out: Response = await mod.default(request);
             res.statusCode = out.status;
-            res.setHeader("content-type", "application/json");
+            out.headers.forEach((v, k) => res.setHeader(k, v));
             res.end(await out.text());
             return;
           }

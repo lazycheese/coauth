@@ -4,6 +4,12 @@
 
 export type FieldType = "text" | "code" | "date" | "select" | "evidence" | "longtext";
 
+/** How a documented therapy trial ended.
+ *
+ * "responded" is the case that matters most: a drug that worked is not a drug
+ * that failed, and step-therapy criteria are about failures. */
+export type TrialResult = "failed" | "responded" | "ongoing" | "unknown";
+
 export interface FieldDef {
   id: string;
   label: string;
@@ -46,7 +52,18 @@ export interface Patient {
   dob: string;
   memberId: string;
   diagnoses: { code: string; label: string }[];
-  medsTried: { name: string; klass: string; durationMonths: number; outcome: string }[];
+  medsTried: {
+    name: string;
+    klass: string;
+    durationMonths: number;
+    /** Free-text note as the chart records it. Displayed, never parsed. */
+    outcome: string;
+    /** Structured outcome. Whether a trial failed is a clinical fact, so the
+     * chart states it rather than leaving it to be inferred from the wording of
+     * the note. Reading it out of the prose classified "Excellent response, no
+     * adverse events" as a failure, which then reached a payer letter. */
+    result: TrialResult;
+  }[];
   labs: { name: string; value: string; date: string; flag?: "normal" | "abnormal" | "critical" }[];
   /** Clinical facts the risk/conflict engine reasons over. */
   clinical: {
@@ -67,8 +84,15 @@ export interface DrugSpec {
   /** ICD-10 prefixes the drug is indicated for. */
   indications: string[];
   indicationLabel: string;
-  /** Plausible single-dose range in mg. */
+  /** Plausible single-dose range in mg, across every labelled regimen.
+   *
+   * Wide on purpose. Induction doses are far larger than maintenance doses, and
+   * a range drawn from maintenance alone flags a correct on-label loading dose
+   * as an error. The rule is a sanity check against a transcription slip, not a
+   * dosing calculator. */
   doseMgRange: [number, number];
+  /** Doses the label defines, for the explanation when one is out of range. */
+  doseNote: string;
   /** Biologics require documented TB screening before initiation. */
   requiresTbScreen: boolean;
 }
@@ -77,17 +101,26 @@ export const drugs: Record<string, DrugSpec> = {
   J0135: {
     hcpcs: "J0135",
     name: "Adalimumab (Humira)",
-    indications: ["M05", "M06", "L40.5", "K50", "K51", "M45"],
-    indicationLabel: "rheumatoid arthritis, psoriatic arthritis, ankylosing spondylitis, or inflammatory bowel disease",
-    doseMgRange: [20, 80],
+    // M08 (juvenile idiopathic arthritis) belongs here: adalimumab is approved
+    // for polyarticular JIA, and omitting it reported a labelled indication as
+    // a critical mismatch. L40 covers plaque psoriasis as well as L40.5.
+    indications: ["M05", "M06", "M08", "L40", "K50", "K51", "M45", "L73.2"],
+    indicationLabel:
+      "rheumatoid arthritis, juvenile idiopathic arthritis, psoriatic arthritis, plaque psoriasis, ankylosing spondylitis, hidradenitis suppurativa, or inflammatory bowel disease",
+    // 10 mg is the smallest pediatric dose; 160 mg is the Crohn's, ulcerative
+    // colitis and hidradenitis suppurativa induction dose at week 0.
+    doseMgRange: [10, 160],
+    doseNote: "10-40 mg maintenance; 80 mg and 160 mg induction doses are labelled",
     requiresTbScreen: true,
   },
   J1438: {
     hcpcs: "J1438",
     name: "Etanercept (Enbrel)",
-    indications: ["M05", "M06", "L40.5", "M45", "M08"],
-    indicationLabel: "rheumatoid arthritis, psoriatic arthritis, ankylosing spondylitis, or juvenile idiopathic arthritis",
+    indications: ["M05", "M06", "L40", "M45", "M08"],
+    indicationLabel:
+      "rheumatoid arthritis, psoriatic arthritis, plaque psoriasis, ankylosing spondylitis, or juvenile idiopathic arthritis",
     doseMgRange: [25, 50],
+    doseNote: "25 mg twice weekly or 50 mg weekly",
     requiresTbScreen: true,
   },
 };
@@ -111,8 +144,8 @@ export const patients: Record<string, Patient> = {
     memberId: "UHC-88213",
     diagnoses: [{ code: "M06.9", label: "Rheumatoid arthritis, unspecified" }],
     medsTried: [
-      { name: "Methotrexate", klass: "csDMARD", durationMonths: 4, outcome: "Inadequate response" },
-      { name: "Sulfasalazine", klass: "csDMARD", durationMonths: 2, outcome: "Discontinued - intolerance" },
+      { name: "Methotrexate", klass: "csDMARD", durationMonths: 4, outcome: "Inadequate response", result: "failed" },
+      { name: "Sulfasalazine", klass: "csDMARD", durationMonths: 2, outcome: "Discontinued - intolerance", result: "failed" },
     ],
     labs: [
       { name: "CRP", value: "18 mg/L", date: "2026-08-10", flag: "abnormal" },
@@ -130,7 +163,7 @@ export const patients: Record<string, Patient> = {
     diagnoses: [{ code: "L40.50", label: "Arthropathic psoriasis, unspecified" }],
     // Denial-risk scenario: only 1 short DMARD trial AND a positive TB screen.
     medsTried: [
-      { name: "Methotrexate", klass: "csDMARD", durationMonths: 1, outcome: "Ongoing - <3 months" },
+      { name: "Methotrexate", klass: "csDMARD", durationMonths: 1, outcome: "Ongoing - <3 months", result: "ongoing" },
     ],
     labs: [
       { name: "CRP", value: "9 mg/L", date: "2026-08-12", flag: "abnormal" },
@@ -145,9 +178,9 @@ export const patients: Record<string, Patient> = {
     memberId: "UHC-41077",
     diagnoses: [{ code: "M45.0", label: "Ankylosing spondylitis of multiple sites in spine" }],
     medsTried: [
-      { name: "Naproxen", klass: "NSAID", durationMonths: 5, outcome: "Inadequate response" },
-      { name: "Methotrexate", klass: "csDMARD", durationMonths: 6, outcome: "Inadequate response" },
-      { name: "Sulfasalazine", klass: "csDMARD", durationMonths: 4, outcome: "Inadequate response" },
+      { name: "Naproxen", klass: "NSAID", durationMonths: 5, outcome: "Inadequate response", result: "failed" },
+      { name: "Methotrexate", klass: "csDMARD", durationMonths: 6, outcome: "Inadequate response", result: "failed" },
+      { name: "Sulfasalazine", klass: "csDMARD", durationMonths: 4, outcome: "Inadequate response", result: "failed" },
     ],
     labs: [
       { name: "CRP", value: "24 mg/L", date: "2026-08-15", flag: "abnormal" },

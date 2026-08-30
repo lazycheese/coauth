@@ -8,8 +8,10 @@
 CoAuth exposes 13 WebMCP tools. The agent can load the patient record, read payer
 rules, fill non-judgment fields, attach evidence, assess denial risk, detect
 clinical conflicts, and draft narrative text and appeal letters. The agent cannot
-fabricate clinician-judgment fields or submit - `submit` is gated behind a human
-signature.
+fabricate clinician-judgment fields or submit. `fill_field` refuses
+clinician-judgment fields outright, and `submit` requires an approval that is
+minted only for an authenticated clinician session - there is no tool that
+authenticates, so an agent has no route to one.
 
 ## When to use
 
@@ -19,7 +21,8 @@ agent to do the form-filling and rule-checking while a clinician keeps final say
 Good jobs: "start a prior auth for <patient> <drug> with <payer>", "check this PA
 for denial risk", "what's missing before we submit", "draft the medical-necessity
 statement", "draft an appeal for this denial". Do not use it to submit without a
-clinician: `submit` is blocked until a human signs.
+clinician: `submit` is blocked until a human signs, and the signature is bound
+to an authenticated clinician identity rather than to a name in a request.
 
 ## Developer resources
 
@@ -51,4 +54,5 @@ clinician: `submit` is blocked until a human signs.
 - draft_field: propose clinician-judgment text, suggestion only (read)
 - draft_appeal: draft an appeal letter from the record and payer policy (read)
 - flag_for_human: mark a field as needing clinician input (write)
-- submit: submit the prior authorization - blocked until the clinician signs
+- submit: submit the prior authorization - blocked until an authenticated
+  clinician signs; the server re-checks the clinical rules before accepting

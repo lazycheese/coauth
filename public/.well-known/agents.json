@@ -28,7 +28,7 @@
         "2025-03-26"
       ],
       "scope": "read-only",
-      "note": "These three tools are the read-only data surface: patient records, payer coverage rules and validation. The interactive workspace tools (filling fields, drafting clinician text, submitting) are exposed in the page via WebMCP, because they act on a live workspace that only exists in the browser. Submission always requires a clinician signature and cannot be performed over MCP.",
+      "note": "These three tools are the read-only data surface: patient records, payer coverage rules and validation. The interactive workspace tools (filling fields, drafting clinician text, submitting) are exposed in the page via WebMCP, because they act on a live workspace that only exists in the browser. Submission requires a signature minted for an authenticated clinician and cannot be performed over MCP.",
       "tools": [
         "get_patient",
         "get_payer_rules",
@@ -61,7 +61,7 @@
     "humanGatedTools": [
       "submit"
     ],
-    "notes": "submit is blocked until a human clinician signs. Agents must not fabricate clinician-judgment fields or resolve critical clinical conflicts."
+    "notes": "submit requires an approval minted only for an authenticated clinician session; no tool authenticates, so an agent has no route to one. fill_field refuses clinician-judgment fields outright, and the submit endpoint independently re-runs the clinical rules, so bypassing the page bypasses nothing."
   },
   "openapi": "https://coauth.vercel.app/openapi.json",
   "contact": "https://github.com/lazycheese/coauth"

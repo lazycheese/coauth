@@ -11,6 +11,7 @@ import { useCoAuth } from "./store/coauthStore";
 import { tools } from "./mcp/registerTools";
 import { runDemo, type DemoHandle } from "./demo/runner";
 import { beginScriptedRun, endScriptedRun } from "./app/scriptedRun";
+import { useUnsavedGuard } from "./lib/useUnsavedGuard";
 
 function TopBar({ onCompare, onDemo, demoRunning }: { onCompare: () => void; onDemo: () => void; demoRunning: boolean }) {
   const toolCount = tools.length;
@@ -43,6 +44,7 @@ export function App() {
   const [caption, setCaption] = useState<string | null>(null);
   const [demoRunning, setDemoRunning] = useState(false);
   const handleRef = useRef<DemoHandle | null>(null);
+  useUnsavedGuard();
 
   const startDemo = async () => {
     const handle: DemoHandle = { cancelled: false };

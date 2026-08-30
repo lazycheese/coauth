@@ -8,7 +8,10 @@ import { humanActions } from "../app/actions";
 
 function FieldRow({ field, flash }: { field: FieldDef; flash: boolean }) {
   const value = useCoAuth((s) => s.formFields[field.id]);
-  const result = useCoAuth((s) => s.validation?.results.find((r) => r.fieldId === field.id));
+  // Selecting the row's own result rather than scanning the whole list in each
+  // row on every render. With a dozen fields this is not a performance problem;
+  // it is a habit that becomes one.
+  const result = useCoAuth((s) => s.validationByField[field.id]);
   const setField = useCoAuth((s) => s.setField);
   const setFocused = useCoAuth((s) => s.setFocused);
   const runValidation = useCoAuth((s) => s.runValidation);

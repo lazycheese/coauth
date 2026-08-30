@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useCoAuth } from "../store/coauthStore";
 import { humanActions } from "../app/actions";
+import { useSession } from "../lib/useSession";
 
 export function ReviewSign() {
   const validation = useCoAuth((s) => s.validation);
@@ -10,8 +11,13 @@ export function ReviewSign() {
   const signatureVoided = useCoAuth((s) => s.signatureVoided);
   const sign = useCoAuth((s) => s.sign);
   const logActivity = useCoAuth((s) => s.logActivity);
+  const provenance = useCoAuth((s) => s.provenance);
+  const session = useSession();
   const [attested, setAttested] = useState(false);
-  const [signer, setSigner] = useState("");
+  const [clinicianId, setClinicianId] = useState("");
+  const [passphrase, setPassphrase] = useState("");
+  const [authError, setAuthError] = useState<string | null>(null);
+  const [authBusy, setAuthBusy] = useState(false);
   const [signing, setSigning] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   // State updates are batched, so two clicks in the same tick both read the old
@@ -31,16 +37,43 @@ export function ReviewSign() {
 
   const judgmentPending = validation?.results.filter((r) => !r.ok && r.requiresHumanJudgment) ?? [];
   const missing = validation?.failCount ?? 0;
-  // An attestation with no identifiable signer is not an approval.
-  const signerOk = signer.trim().length >= 3;
+
+  // A judgment field holding text an agent wrote is not the clinician's
+  // judgment, whatever the validator makes of it. fill_field refuses these
+  // outright; this is the second lock, so a value that reaches the field by
+  // some other route still cannot be signed over until the clinician adopts it.
+  const agentWritten = (validation?.results ?? []).filter(
+    (r) => r.requiresHumanJudgment && provenance[r.fieldId]?.by === "agent"
+  );
+
+  const authed = session.status === "authenticated";
   const canSign =
-    missing === 0 && judgmentPending.length === 0 && unresolvedCritical.length === 0 && attested && signerOk && !approvalToken && !signing;
+    authed &&
+    missing === 0 &&
+    judgmentPending.length === 0 &&
+    agentWritten.length === 0 &&
+    unresolvedCritical.length === 0 &&
+    attested &&
+    !approvalToken &&
+    !signing;
+
+  const onSignIn = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setAuthBusy(true);
+    setAuthError(null);
+    try {
+      setAuthError(await session.signIn(clinicianId, passphrase));
+      setPassphrase("");
+    } finally {
+      setAuthBusy(false);
+    }
+  };
 
   const onSign = async () => {
     setSigning(true);
     try {
-      const token = await sign("I attest this prior authorization is clinically accurate.", signer.trim());
-      logActivity("human", "sign", `Signed by ${signer.trim()} (${token.serverVerified ? "server-verified" : "local only"})`);
+      const token = await sign("I attest this prior authorization is clinically accurate.");
+      if (token) logActivity("human", "sign", `Signed by ${token.signer} (NPI ${token.npi}), server-verified`);
     } finally {
       setSigning(false);
     }
@@ -96,6 +129,13 @@ export function ReviewSign() {
         </p>
       )}
 
+      {agentWritten.length > 0 && (
+        <div className="banner banner-warn" data-testid="agent-written-block">
+          <strong>Agent-written text in a clinician field.</strong> {agentWritten.map((r) => r.label).join("; ")}. Read
+          it, edit it if needed, and adopt it as your own before signing.
+        </div>
+      )}
+
       {judgmentPending.length > 0 && (
         <div className="judgment-list">
           <p className="muted">Needs your clinical judgment:</p>
@@ -109,23 +149,60 @@ export function ReviewSign() {
 
       {!approvalToken ? (
         <>
-          <label className="signer-field">
-            <span>Signing clinician</span>
-            <input
-              type="text"
-              data-testid="signer-input"
-              placeholder="Name and credentials"
-              value={signer}
-              disabled={missing > 0 || judgmentPending.length > 0 || unresolvedCritical.length > 0}
-              onChange={(e) => setSigner(e.target.value)}
-            />
-          </label>
+          {authed ? (
+            <div className="signer-identity" data-testid="signer-identity">
+              <span>
+                Signing as <strong>{session.clinician?.name}</strong>, {session.clinician?.role}, NPI{" "}
+                {session.clinician?.npi}
+              </span>
+              <button className="btn btn-quiet" data-testid="sign-out" onClick={() => void session.signOut()}>
+                Sign out
+              </button>
+            </div>
+          ) : (
+            <form className="signin" data-testid="clinician-signin" onSubmit={onSignIn}>
+              <p className="muted">
+                Only an authenticated clinician can sign. The approval is minted for the signed-in identity, so an
+                agent driving this page has no route to one. Demo credentials are in the repository README, not on
+                this page: printing them here would hand them to any agent reading the form.
+              </p>
+              <label>
+                <span>Clinician</span>
+                <select data-testid="signin-clinician" value={clinicianId} onChange={(e) => setClinicianId(e.target.value)}>
+                  <option value="">Select</option>
+                  {session.directory.map((c) => (
+                    <option key={c.id} value={c.id}>
+                      {c.name} ({c.role})
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                <span>Passphrase</span>
+                <input
+                  type="password"
+                  data-testid="signin-passphrase"
+                  autoComplete="current-password"
+                  value={passphrase}
+                  onChange={(e) => setPassphrase(e.target.value)}
+                />
+              </label>
+              <button className="btn" data-testid="signin-submit" disabled={authBusy || !clinicianId || !passphrase}>
+                {authBusy ? "Signing in" : "Sign in"}
+              </button>
+              {authError && (
+                <p className="danger-text" data-testid="signin-error">
+                  {authError}
+                </p>
+              )}
+            </form>
+          )}
           <label className="attest">
             <input
               type="checkbox"
               data-testid="attest-checkbox"
               checked={attested}
-              disabled={missing > 0 || judgmentPending.length > 0 || unresolvedCritical.length > 0}
+              disabled={!authed || missing > 0 || judgmentPending.length > 0 || agentWritten.length > 0 || unresolvedCritical.length > 0}
               onChange={(e) => setAttested(e.target.checked)}
             />
             <span>I attest this prior authorization is clinically accurate.</span>
@@ -155,11 +232,7 @@ export function ReviewSign() {
                 {a.attestation}
               </span>
               <span className={`audit-verify verify-${a.voided ? "voided" : a.verifiedBy}`}>
-                {a.voided
-                  ? "voided: the submission changed after this signature"
-                  : a.verifiedBy === "server"
-                  ? "signature verified by the server"
-                  : "local signature only, not server-verified"}
+                {a.voided ? "voided: the submission changed after this signature" : "signature verified by the server"}
               </span>
               <span className="muted">{a.hash}{a.confirmationId ? ` · ${a.confirmationId}` : ""}</span>
             </div>

@@ -27,7 +27,12 @@ export function replayProtection(): ReplayProtection {
   return KV_URL() && KV_TOKEN() ? "durable" : "best-effort";
 }
 
-/** Per-instance fallback. Bounded so a long-lived instance cannot grow forever. */
+/** Per-instance fallback.
+ *
+ * Bounded, but only loosely: the sweep runs when the map passes 5000 entries
+ * and removes only entries that have already expired, so a burst of live
+ * approvals can sit above that mark until they age out. Entries are small and
+ * expire with the token TTL, which is what keeps this finite. */
 const local = new Map<string, { value: string; expires: number }>();
 
 function localClaim(key: string, value: string, ttlMs: number): ClaimResult {
@@ -63,8 +68,13 @@ export async function claimOnce(jti: string, confirmationId: string, ttlMs: numb
     const priorBody = await prior.json();
     return { fresh: false, existing: priorBody?.result ?? undefined, protection: "durable" };
   } catch {
-    // The store is configured but unreachable. Fail closed on the guarantee:
-    // fall back to per-instance memory and report the weaker protection.
+    // The store is configured but unreachable.
+    //
+    // This falls OPEN, not closed: the submission still proceeds, protected
+    // only by this instance's memory. That is a deliberate availability
+    // trade-off - refusing every submission because a cache is down would be
+    // worse - but it is not a guarantee, and the response says so by reporting
+    // "best-effort" rather than "durable".
     return localClaim(jti, confirmationId, ttlMs);
   }
 }

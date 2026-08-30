@@ -59,16 +59,21 @@ export async function runDemo(setCaption: (c: string) => void, handle: DemoHandl
 
   await step("The agent drafts the medical-necessity language - grounded in the chart, not invented.", () => t.draftField("medical_necessity"), 1700);
   await step("The clinician reviews the draft and accepts it - staying accountable for the words.", () => store().acceptSuggestion("medical_necessity"), 1400);
-  store().setField("attending_attestation", "Attested");
+
+  // The walkthrough stops here, and the stopping is the point.
+  //
+  // What remains is the attending attestation and the signature. Neither is
+  // something this script can do: fill_field refuses clinician-judgment fields,
+  // and an approval is minted only for an authenticated clinician session. An
+  // earlier version of this walkthrough wrote the attestation itself and called
+  // sign() with a made-up name, which demonstrated the opposite of what the
+  // product claims.
+  await step("The agent tries to submit. It cannot: no clinician has signed.", () => t.submit(), 1600);
+
   store().runValidation();
-  await wait(900);
+  await wait(600);
 
-  await step("Risk drops. Requirements met. The clinician signs & attests.", async () => {
-    await store().sign("I attest this prior authorization is clinically accurate.", "Dr. A. Reyes, MD (demo)");
-    store().logActivity("human", "sign", "Clinician signed & attested");
-  }, 1400);
-
-  await step("Only now does submit succeed - human-signed, conflict-checked, audit-logged.", () => t.submit(), 1400);
-
-  setCaption("Human + agent, on the same page: the agent's speed, the clinician's judgment.");
+  setCaption(
+    "This is as far as an agent goes. The attestation and the signature are the clinician's: sign in on the right to finish it."
+  );
 }

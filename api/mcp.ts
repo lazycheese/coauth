@@ -1,4 +1,5 @@
 import { patientResult, payerRulesResult, validateResult } from "./_handlers";
+import { patients, payers } from "../src/data/seed";
 
 export const config = { runtime: "edge" };
 
@@ -20,8 +21,14 @@ const INSTRUCTIONS = [
   "CoAuth prepares health-insurance prior authorizations with a clinician in the loop.",
   "These MCP tools are read-only: they return patient records, payer coverage rules and validation results.",
   "Filling a form, drafting clinician text and submitting happen in the page via WebMCP tools, because they act on a live workspace.",
-  "Submission always requires a clinician signature and cannot be performed through this server.",
+  "Submission requires an approval minted only for an authenticated clinician session, and cannot be performed through this server.",
 ].join(" ");
+
+// Derived from the seed data rather than written out here. A hand-maintained
+// enum listing two of the three patients meant a model that respected the
+// schema could never reach the third, while the endpoint served her happily.
+const PATIENT_IDS = Object.keys(patients);
+const PAYER_IDS = Object.keys(payers);
 
 const TOOLS = [
   {
@@ -32,10 +39,39 @@ const TOOLS = [
     inputSchema: {
       type: "object",
       properties: {
-        id: { type: "string", enum: ["jane-doe", "marcus-lee"], description: "Patient identifier." },
+        id: { type: "string", enum: PATIENT_IDS, description: "Patient identifier." },
       },
       required: ["id"],
       additionalProperties: false,
+    },
+    outputSchema: {
+      type: "object",
+      properties: {
+        id: { type: "string" },
+        name: { type: "string" },
+        dob: { type: "string" },
+        memberId: { type: "string" },
+        diagnoses: { type: "array", items: { type: "object", properties: { code: { type: "string" }, label: { type: "string" } } } },
+        medsTried: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: {
+              name: { type: "string" },
+              klass: { type: "string" },
+              durationMonths: { type: "number" },
+              outcome: { type: "string" },
+              result: { type: "string", enum: ["failed", "responded", "ongoing", "unknown"] },
+            },
+          },
+        },
+        labs: { type: "array", items: { type: "object", properties: { name: { type: "string" }, value: { type: "string" }, date: { type: "string" }, flag: { type: "string" } } } },
+        clinical: {
+          type: "object",
+          properties: { tbScreen: { type: "string" }, activeInfection: { type: "boolean" }, priorBiologics: { type: "number" } },
+        },
+      },
+      required: ["id", "name", "diagnoses", "medsTried", "labs", "clinical"],
     },
     annotations: { title: "Get patient record", readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
   },
@@ -47,10 +83,37 @@ const TOOLS = [
     inputSchema: {
       type: "object",
       properties: {
-        payer: { type: "string", enum: ["uhc", "aetna", "cigna"], description: "Insurer identifier." },
+        payer: { type: "string", enum: PAYER_IDS, description: "Insurer identifier." },
       },
       required: ["payer"],
       additionalProperties: false,
+    },
+    outputSchema: {
+      type: "object",
+      properties: {
+        id: { type: "string" },
+        name: { type: "string" },
+        drug: { type: "string" },
+        coveredDrugs: { type: "array", items: { type: "string" } },
+        policy: { type: "array", items: { type: "string" } },
+        criteria: {
+          type: "object",
+          properties: { minDmardMonths: { type: "number" }, minDmardCount: { type: "number" }, requiresSpecialist: { type: "boolean" } },
+        },
+        requiredFields: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: {
+              id: { type: "string" },
+              label: { type: "string" },
+              type: { type: "string" },
+              requiresHumanJudgment: { type: "boolean" },
+            },
+          },
+        },
+      },
+      required: ["id", "name", "criteria", "requiredFields"],
     },
     annotations: { title: "Get payer coverage rules", readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
   },
@@ -62,7 +125,7 @@ const TOOLS = [
     inputSchema: {
       type: "object",
       properties: {
-        payer: { type: "string", enum: ["uhc", "aetna", "cigna"], description: "Insurer to validate against." },
+        payer: { type: "string", enum: PAYER_IDS, description: "Insurer to validate against." },
         formFields: {
           type: "object",
           additionalProperties: true,
@@ -72,9 +135,79 @@ const TOOLS = [
       required: ["payer", "formFields"],
       additionalProperties: false,
     },
+    outputSchema: {
+      type: "object",
+      properties: {
+        results: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: {
+              fieldId: { type: "string" },
+              label: { type: "string" },
+              ok: { type: "boolean" },
+              invalid: { type: "boolean" },
+              requiresHumanJudgment: { type: "boolean" },
+              reason: { type: "string" },
+            },
+          },
+        },
+        failCount: { type: "number" },
+        judgmentCount: { type: "number" },
+        invalidCount: { type: "number" },
+        passCount: { type: "number" },
+        clearForSignature: { type: "boolean" },
+      },
+      required: ["results", "failCount", "judgmentCount", "invalidCount", "passCount", "clearForSignature"],
+    },
     annotations: { title: "Validate a submission", readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
   },
 ];
+
+/** Check arguments against a tool's own declared inputSchema.
+ *
+ * The server used to coerce whatever arrived - String(args?.id ?? "") - so a
+ * call omitting a required property, or passing a string where an object was
+ * declared, produced a tool result rather than an error. A schema the server
+ * does not itself enforce is a suggestion, and a stricter client would diverge
+ * from this one's behaviour for the same call.
+ *
+ * Deliberately small: this covers the constructs these schemas actually use
+ * (required, type, enum, additionalProperties) rather than pretending to be a
+ * general JSON Schema validator. */
+function schemaViolation(schema: any, args: unknown): string | null {
+  if (args === undefined || args === null) {
+    return (schema?.required ?? []).length ? `Missing required argument(s): ${schema.required.join(", ")}.` : null;
+  }
+  if (typeof args !== "object" || Array.isArray(args)) {
+    return "Arguments must be a JSON object.";
+  }
+  const a = args as Record<string, unknown>;
+
+  for (const key of schema?.required ?? []) {
+    if (a[key] === undefined || a[key] === null) return `Missing required argument "${key}".`;
+  }
+  if (schema?.additionalProperties === false) {
+    const known = Object.keys(schema.properties ?? {});
+    const extra = Object.keys(a).filter((k) => !known.includes(k));
+    if (extra.length) return `Unknown argument(s): ${extra.join(", ")}. Accepted: ${known.join(", ")}.`;
+  }
+  for (const [key, raw] of Object.entries(schema?.properties ?? {})) {
+    const spec = raw as any;
+    const value = a[key];
+    if (value === undefined) continue;
+    if (spec.type === "string" && typeof value !== "string") return `"${key}" must be a string.`;
+    if (spec.type === "object" && (typeof value !== "object" || value === null || Array.isArray(value))) {
+      return `"${key}" must be an object.`;
+    }
+    if (spec.type === "number" && typeof value !== "number") return `"${key}" must be a number.`;
+    if (spec.type === "boolean" && typeof value !== "boolean") return `"${key}" must be a boolean.`;
+    if (Array.isArray(spec.enum) && !spec.enum.includes(value)) {
+      return `"${key}" must be one of: ${spec.enum.join(", ")}.`;
+    }
+  }
+  return null;
+}
 
 interface ToolOutcome {
   body: unknown;
@@ -139,17 +272,25 @@ function rpcError(id: unknown, code: number, message: string, version: string, s
   });
 }
 
-/** The spec requires Origin validation to prevent DNS rebinding attacks. */
+/** Origin validation, as the spec requires, to prevent DNS rebinding attacks.
+ *
+ * This used to allow any host ending in ".vercel.app", which is every
+ * deployment on the platform and therefore not a restriction. It now allows
+ * this deployment, its preview builds, and local development. */
 function originAllowed(req: Request): boolean {
   const origin = req.headers.get("origin");
   if (!origin) return true; // non-browser clients send no Origin
   try {
-    const host = new URL(origin).hostname;
+    const url = new URL(origin);
+    const host = url.hostname;
+    const self = (req.headers.get("host") ?? "").split(":")[0];
     return (
+      host === self ||
       host === "coauth.vercel.app" ||
       host === "localhost" ||
       host === "127.0.0.1" ||
-      host.endsWith(".vercel.app")
+      // Preview deployments of this project only, not the whole platform.
+      /^coauth-[a-z0-9-]+\.vercel\.app$/.test(host)
     );
   } catch {
     return false;
@@ -168,15 +309,14 @@ export default async function handler(req: Request): Promise<Response> {
   // initialization; an unsupported one is a 400.
   const headerVersion = req.headers.get("mcp-protocol-version");
   if (headerVersion && !SUPPORTED.includes(headerVersion)) {
-    return new Response(
-      JSON.stringify({
-        error: {
-          code: "unsupported_protocol_version",
-          message: `Unsupported MCP-Protocol-Version "${headerVersion}".`,
-          supported: SUPPORTED,
-        },
-      }),
-      { status: 400, headers: { "content-type": "application/json" } }
+    // JSON-RPC shaped, like every other error this server returns. It was the
+    // one path emitting a bare object with a string code.
+    return rpcError(
+      null,
+      -32600,
+      `Unsupported MCP-Protocol-Version "${headerVersion}". Supported: ${SUPPORTED.join(", ")}.`,
+      LATEST,
+      400
     );
   }
   const version = headerVersion ?? ASSUMED_WHEN_ABSENT;
@@ -189,9 +329,10 @@ export default async function handler(req: Request): Promise<Response> {
     return new Response(null, { status: 405, headers: { Allow: "POST" } });
   }
 
-  // The client must be willing to accept a JSON response.
+  // The client must state that it accepts JSON. An absent Accept header used to
+  // pass, because the check only ran when the header was present.
   const accept = req.headers.get("accept") ?? "";
-  if (accept && !accept.includes("application/json") && !accept.includes("*/*")) {
+  if (!accept.includes("application/json") && !accept.includes("*/*")) {
     return new Response(
       JSON.stringify({ error: { code: "not_acceptable", message: "This endpoint returns application/json." } }),
       { status: 406, headers: { "content-type": "application/json" } }
@@ -251,16 +392,32 @@ export default async function handler(req: Request): Promise<Response> {
 
     case "tools/call": {
       const name = String(params?.name ?? "");
-      const outcome = callTool(name, params?.arguments);
-      if (!outcome) {
+      const tool = TOOLS.find((t) => t.name === name);
+      if (!tool) {
         // An unknown tool is a protocol-level error, not a tool result.
         return rpcError(id, -32602, `Unknown tool "${name}". Available: ${TOOLS.map((t) => t.name).join(", ")}.`, version);
       }
+      // Invalid params is likewise a protocol-level error.
+      const violation = schemaViolation(tool.inputSchema, params?.arguments);
+      if (violation) {
+        return rpcError(id, -32602, `Invalid arguments for "${name}": ${violation}`, version);
+      }
+      const outcome = callTool(name, params?.arguments);
+      if (!outcome) {
+        return rpcError(id, -32602, `Unknown tool "${name}". Available: ${TOOLS.map((t) => t.name).join(", ")}.`, version);
+      }
       // A tool that ran but failed reports through the result, per the spec.
+      //
+      // The text block carries the serialized structured result as well as the
+      // summary line: a client that reads only `content` used to get a one-line
+      // precis and lose every field of the record.
       return rpcResult(
         id,
         {
-          content: [{ type: "text", text: outcome.summary }],
+          content: [
+            { type: "text", text: outcome.summary },
+            { type: "text", text: JSON.stringify(outcome.body, null, 2) },
+          ],
           structuredContent: outcome.body,
           isError: outcome.isError,
         },

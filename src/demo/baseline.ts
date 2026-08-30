@@ -1,4 +1,5 @@
 import { useCoAuth } from "../store/coauthStore";
+import { scriptedAgentActions } from "../app/actions";
 
 // A DOM-driven baseline, for measuring rather than for illustration.
 //
@@ -7,15 +8,31 @@ import { useCoAuth } from "../store/coauthStore";
 // no schema, so it cannot know that a diagnosis field wants an ICD-10 code and
 // not the diagnosis name, and no notion of which fields a clinician must own.
 //
-// It is deliberately a fair-minded implementation, not a strawman: it reads the
-// visible patient panel, matches on label text, and fills what it can find. The
-// numbers the comparison shows are whatever this actually achieves against the
-// same form, measured in the browser at the time you run it.
+// What this comparison does and does not claim:
+//
+//   - It measures what each path achieves on the form: how many fields end up
+//     filled, malformed or missing, how many clinician-only fields get written
+//     to, and how many clinical conflicts each path surfaces. Every one of
+//     those is read back out of the store after the run.
+//   - It does NOT measure speed, and no longer reports a time. An earlier
+//     version showed a wall-clock difference produced by hardcoded, asymmetric
+//     sleep() calls on the two paths - a design decision typed into this file
+//     and presented as a measurement. There are no sleeps here now, and both
+//     paths run against the same store on the same clock, so the only honest
+//     reading of a duration would be of this machine's JavaScript, which is not
+//     what anyone wants to know.
+//   - Neither arm is an LLM. This compares the two interfaces a model is given,
+//     not two models. The baseline's wrong answers come from having only label
+//     text to go on; the tool path's come from nowhere, because the schema
+//     names the code it wants.
+//
+// The baseline is a fair-minded implementation rather than a strawman: it reads
+// the visible patient panel, matches on label text, and fills what it can find.
+// Where it gets something wrong, that is the point being measured.
 
 export interface RunMetrics {
   label: string;
   steps: number;
-  wallClockMs: number;
   fieldsFilled: number;
   fieldsMissing: number;
   fieldsInvalid: number;
@@ -24,7 +41,21 @@ export interface RunMetrics {
   outcome: string;
 }
 
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+/** Cooperative cancellation, so closing the dialog actually stops the run. */
+export interface RunHandle {
+  cancelled: boolean;
+}
+
+export class RunCancelled extends Error {
+  constructor() {
+    super("run cancelled");
+    this.name = "RunCancelled";
+  }
+}
+
+function checkCancelled(handle?: RunHandle) {
+  if (handle?.cancelled) throw new RunCancelled();
+}
 
 function setNative(el: HTMLInputElement | HTMLTextAreaElement, value: string) {
   const proto = el instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
@@ -55,10 +86,14 @@ function guess(labelText: string, facts: string[]): string | null {
     const line = facts.find((f) => /arthritis|psoriasis|rheumatoid/i.test(f));
     return line ?? null;
   }
-  if (l.includes("drug") || l.includes("hcpcs")) return "Humira";
+  // The page shows the drug by brand name, which is what a reader of the page
+  // has. The payer file wants a HCPCS code, and nothing rendered says so.
+  if (l.includes("drug") || l.includes("hcpcs")) {
+    return find(/\b[A-Z][a-z]+ \(adalimumab\)/) ?? facts.find((f) => /humira|adalimumab/i.test(f)) ?? null;
+  }
   if (l.includes("dose")) return "40mg every other week";
   if (l.includes("quantity")) return "2";
-  if (l.includes("npi")) return "unknown";
+  if (l.includes("npi")) return null;
   if (l.includes("step therapy")) {
     const meds = facts.filter((f) => /methotrexate|sulfasalazine/i.test(f));
     return meds.join("; ") || null;
@@ -68,16 +103,40 @@ function guess(labelText: string, facts: string[]): string | null {
   return null;
 }
 
-/** Run the baseline against the live form and measure what it achieves. */
-export async function runBaseline(onStep?: (s: string) => void): Promise<RunMetrics> {
+/** Read the outcome of a run out of the store, the same way for both paths. */
+function measure(label: string, steps: number, judgmentTouched: number): RunMetrics {
   const store = useCoAuth.getState;
-  const started = performance.now();
+  const v = store().runValidation();
+  const invalid = v.invalidCount;
+  const missing = Math.max(0, v.failCount - invalid);
+  return {
+    label,
+    steps,
+    fieldsFilled: v.results.filter((r) => r.ok).length + invalid,
+    fieldsMissing: missing,
+    fieldsInvalid: invalid,
+    judgmentFieldsTouched: judgmentTouched,
+    // Read from the store for both paths. The baseline's count used to be a
+    // hardcoded 0 on the grounds that it "has no rules engine to consult" -
+    // but it drives the same store, whose validation computes conflicts, so
+    // the zero was asserted rather than observed.
+    conflictsFound: store().conflicts.length,
+    outcome:
+      missing === 0 && invalid === 0
+        ? "Complete, ready for clinician review"
+        : `${missing} missing, ${invalid} malformed`,
+  };
+}
+
+/** Run the baseline against the live form and measure what it achieves. */
+export async function runBaseline(onStep?: (s: string) => void, handle?: RunHandle): Promise<RunMetrics> {
+  const store = useCoAuth.getState;
   let steps = 0;
   let judgmentTouched = 0;
 
   onStep?.("Reading the rendered page");
   steps++;
-  await sleep(120);
+  checkCancelled(handle);
 
   const facts = visibleFacts();
   const rows = Array.from(document.querySelectorAll<HTMLElement>(".field"));
@@ -86,6 +145,7 @@ export async function runBaseline(onStep?: (s: string) => void): Promise<RunMetr
   );
 
   for (const row of rows) {
+    checkCancelled(handle);
     steps++;
     const labelText = row.querySelector(".field-label")?.textContent ?? "";
     const control = row.querySelector<HTMLInputElement | HTMLTextAreaElement>("input, textarea");
@@ -93,7 +153,6 @@ export async function runBaseline(onStep?: (s: string) => void): Promise<RunMetr
     const fieldId = row.getAttribute("data-testid")?.replace("field-", "") ?? "";
 
     onStep?.(`Locating "${labelText.replace(/clinician|verified from chart|agent-entered/gi, "").trim()}"`);
-    await sleep(90);
 
     const value = guess(labelText, facts);
     if (!value) continue;
@@ -110,83 +169,71 @@ export async function runBaseline(onStep?: (s: string) => void): Promise<RunMetr
     } else if (control) {
       setNative(control, value);
     }
-    await sleep(60);
   }
 
-  onStep?.("Submitting");
+  onStep?.("Checking the result");
   steps++;
-  await sleep(150);
+  checkCancelled(handle);
 
-  const v = store().runValidation();
-  const invalid = v.invalidCount;
-  const missing = Math.max(0, v.failCount - invalid);
-  const filled = v.results.length - v.failCount - v.judgmentCount + (v.judgmentCount - v.judgmentCount);
-
-  return {
-    label: "DOM-driven baseline",
-    steps,
-    wallClockMs: Math.round(performance.now() - started),
-    fieldsFilled: v.results.filter((r) => r.ok).length + invalid,
-    fieldsMissing: missing,
-    fieldsInvalid: invalid,
-    judgmentFieldsTouched: judgmentTouched,
-    conflictsFound: 0, // it has no rules engine to consult
-    outcome: v.clearForSignature ? "Reached signature" : `Rejected: ${missing} missing, ${invalid} malformed`,
-  };
+  return measure("DOM-driven baseline", steps, judgmentTouched);
 }
 
-/** The same task through the WebMCP tools, measured on the same clock. */
-export async function runToolPath(onStep?: (s: string) => void): Promise<RunMetrics> {
-  const { scriptedAgentActions } = await import("../app/actions");
+/** The same task through the WebMCP tools, measured the same way. */
+export async function runToolPath(onStep?: (s: string) => void, handle?: RunHandle): Promise<RunMetrics> {
   const store = useCoAuth.getState;
-  const started = performance.now();
   let steps = 0;
+  let judgmentTouched = 0;
 
   const patient = store().patient;
   const rules = store().payerRules;
   if (!patient || !rules) throw new Error("load a patient and payer first");
 
+  // Read the drug from the payer's own coverage file rather than naming a code
+  // here. Handing the tool arm a hardcoded J0135 gave it an answer the baseline
+  // was denied, which made the comparison about the constant rather than about
+  // the interface.
+  const hcpcs = rules.coveredDrugs[0] ?? "";
+
   const values: Record<string, string> = {
     member_id: patient.memberId,
     prescriber_npi: "1487203941",
     diagnosis_code: patient.diagnoses[0].code,
-    hcpcs_code: "J0135", // the drug this payer file covers
+    hcpcs_code: hcpcs,
     dose: "40 mg SC every other week",
     quantity: "2 syringes / 28 days",
     step_therapy: patient.medsTried.map((m) => `${m.name} ${m.durationMonths}mo, ${m.outcome}`).join("; "),
   };
 
+  const judgmentIds = new Set(rules.requiredFields.filter((f) => f.requiresHumanJudgment).map((f) => f.id));
+
   for (const f of rules.requiredFields) {
-    // The schema marks these as the clinician's, so they are never touched.
-    if (f.requiresHumanJudgment) continue;
+    checkCancelled(handle);
     steps++;
     onStep?.(`fill_field: ${f.id}`);
-    if (f.type === "evidence") await scriptedAgentActions.attachEvidence(f.id, "doc-tb");
-    else if (values[f.id]) await scriptedAgentActions.fillField(f.id, values[f.id]);
-    await sleep(60);
+    // Attempt every field, including the clinician's, and count what actually
+    // lands. Skipping them made the resulting zero a property of this loop
+    // rather than of the tool surface, which is what was being measured.
+    let result: unknown;
+    if (f.type === "evidence") result = await scriptedAgentActions.attachEvidence(f.id, "doc-tb");
+    else if (values[f.id]) result = await scriptedAgentActions.fillField(f.id, values[f.id]);
+    else if (judgmentIds.has(f.id)) result = await scriptedAgentActions.fillField(f.id, "Medically necessary.");
+    else continue;
+
+    // A refusal is not a write. fill_field rejects clinician-judgment fields,
+    // so this counts only what the tool surface let through.
+    const refused =
+      typeof result === "object" && result !== null && (result as { status?: string }).status === "refused";
+    if (judgmentIds.has(f.id) && !refused) judgmentTouched++;
   }
 
+  checkCancelled(handle);
   steps++;
   onStep?.("detect_conflicts");
   await scriptedAgentActions.detectConflicts();
-  await sleep(90);
 
+  checkCancelled(handle);
   steps++;
   onStep?.("validate_submission");
-  const v = store().runValidation();
-  await sleep(90);
 
-  const invalid = v.invalidCount;
-  const missing = Math.max(0, v.failCount - invalid);
-  return {
-    label: "WebMCP tools",
-    steps,
-    wallClockMs: Math.round(performance.now() - started),
-    fieldsFilled: v.results.filter((r) => r.ok).length,
-    fieldsMissing: missing,
-    fieldsInvalid: invalid,
-    judgmentFieldsTouched: 0,
-    conflictsFound: store().conflicts.length,
-    outcome: missing === 0 && invalid === 0 ? "Ready for clinician review" : `${missing} missing, ${invalid} malformed`,
-  };
+  return measure("WebMCP tools", steps, judgmentTouched);
 }

@@ -17,8 +17,8 @@ export interface AuditEntry {
   attestation: string;
   signer: string;
   hash: string;
-  /** "server" when the signature was minted and checked by the API. */
-  verifiedBy: "server" | "client-only";
+  /** Always "server": no other kind of signature is recorded. */
+  verifiedBy: "server";
   confirmationId?: string;
   /** Set when the submission changed after this signature was given. */
   voided?: boolean;
@@ -28,15 +28,19 @@ export interface ApprovalToken {
   ts: number;
   attestation: string;
   signer: string;
+  /** Directory id and NPI of the authenticated clinician, from the session. */
+  clinicianId: string;
+  npi: string;
   /** Local digest, shown in the audit trail. */
   hash: string;
-  /** Present only for server-minted tokens; these are what submit verifies. */
-  payer?: string;
-  digest?: string;
-  jti?: string;
-  mac?: string;
-  /** False means no signing service was reachable, so the gate is advisory. */
-  serverVerified: boolean;
+  /** Minted server-side over exactly these. */
+  payer: string;
+  patientId: string;
+  digest: string;
+  jti: string;
+  mac: string;
+  /** Always true: a token that is not server-verified is never constructed. */
+  serverVerified: true;
 }
 
 export interface Flag {
@@ -98,6 +102,8 @@ interface CoAuthState {
   formFields: Record<string, unknown>;
   attachments: Record<string, string>; // fieldId -> docId
   validation: ValidationSummary | null;
+  /** The same results keyed by field, so a row does not scan the list. */
+  validationByField: Record<string, ValidationSummary["results"][number]>;
   risk: RiskAssessment | null;
   conflicts: Conflict[];
   overrides: Record<string, string>;
@@ -134,7 +140,8 @@ interface CoAuthState {
   setWebmcpConnected: (v: boolean) => void;
   setScriptedRun: (r: CoAuthState["scriptedRun"]) => void;
   addFlag: (fieldId: string, reason: string) => void;
-  sign: (attestation: string, signer: string) => Promise<ApprovalToken>;
+  /** Mints a server-verified approval, or null with a toast explaining why not. */
+  sign: (attestation: string) => Promise<ApprovalToken | null>;
   clearApproval: () => void;
   logActivity: (actor: "agent" | "human", tool: string, summary: string) => void;
   setFocused: (fieldId: string | null) => void;
@@ -151,6 +158,11 @@ let activitySeq = 0;
  * voided, because a signature that was given and then superseded is part of the
  * history rather than something to erase. */
 function invalidateApproval(s: CoAuthState): Partial<CoAuthState> {
+  // A confirmed submission is a receipt, not a draft. Editing the form
+  // afterwards used to null submitResult and raise "the signature no longer
+  // applies", wiping the confirmation id off the screen just when someone might
+  // need to write it down. The filing already happened; leave it visible.
+  if (s.submitResult?.status === "submitted") return {};
   if (!s.approvalToken) return { submitResult: null };
   const auditLog = s.auditLog.map((e, i) =>
     i === s.auditLog.length - 1 && !e.confirmationId ? { ...e, voided: true } : e
@@ -158,9 +170,16 @@ function invalidateApproval(s: CoAuthState): Partial<CoAuthState> {
   return { approvalToken: null, submitResult: null, signatureVoided: true, auditLog };
 }
 
-// Deterministic, dependency-free hash of the current form state.
+/** Deterministic, dependency-free hash of the current form state.
+ *
+ * Serialized in the same shape as the server's canonicalize(): an array of
+ * sorted [key, value] pairs. The previous version passed the sorted key list as
+ * JSON.stringify's second argument, which is a replacer allowlist that only
+ * incidentally fixed key order - and which would have silently filtered the
+ * inner keys of any non-flat value. */
 function hashFields(fields: Record<string, unknown>): string {
-  const str = JSON.stringify(fields, Object.keys(fields).sort());
+  const keys = Object.keys(fields ?? {}).sort();
+  const str = JSON.stringify(keys.map((k) => [k, fields[k] ?? null]));
   let h = 5381;
   for (let i = 0; i < str.length; i++) h = ((h << 5) + h + str.charCodeAt(i)) | 0;
   return "sig_" + (h >>> 0).toString(16);
@@ -173,6 +192,7 @@ export const useCoAuth = create<CoAuthState>((set, get) => ({
   formFields: {},
   attachments: {},
   validation: null,
+  validationByField: {},
   risk: null,
   conflicts: [],
   overrides: {},
@@ -218,7 +238,8 @@ export const useCoAuth = create<CoAuthState>((set, get) => ({
     const summary = validate(s.formFields, s.payerRules);
     const risk = assessRisk(s.formFields, s.patient, s.payerRules, s.overrides);
     const conflicts = detectConflicts(s.formFields, s.patient, s.payerRules, s.overrides);
-    set({ validation: summary, risk, conflicts });
+    const validationByField = Object.fromEntries(summary.results.map((r) => [r.fieldId, r]));
+    set({ validation: summary, validationByField, risk, conflicts });
     return summary;
   },
 
@@ -247,8 +268,10 @@ export const useCoAuth = create<CoAuthState>((set, get) => ({
         formFields: { ...s.formFields, [fieldId]: text },
         suggestions: rest,
         provenance: { ...s.provenance, [fieldId]: { by: "clinician", source: "accepted agent draft" } },
-        approvalToken: null,
-        submitResult: null,
+        // Accepting a draft changes the submission, so it voids a signature for
+        // exactly the same reason editing a field does. Clearing the token by
+        // hand here left signatureVoided false and the audit row reading live.
+        ...invalidateApproval(s),
       };
     });
     get().runValidation();
@@ -259,36 +282,60 @@ export const useCoAuth = create<CoAuthState>((set, get) => ({
       flags: [...s.flags.filter((f) => f.fieldId !== fieldId), { fieldId, reason }],
     })),
 
-  sign: async (attestation, signer) => {
+  sign: async (attestation) => {
     const s0 = get();
     const localHash = hashFields(s0.formFields);
-    let token: ApprovalToken = {
-      ts: Date.now(),
-      attestation,
-      signer,
-      hash: localHash,
-      serverVerified: false,
-    };
 
     // Ask the signing service to mint the token. Only a server-minted token can
-    // be verified at submit time, so this is what makes the gate real.
+    // be verified at submit time, and minting requires an authenticated
+    // clinician session, so this is what makes the gate real. The signer's
+    // identity comes back from the session; it is deliberately not sent, so it
+    // cannot be chosen by whatever is driving the page.
+    let token: ApprovalToken;
     try {
       const res = await postJson("/api/v1/sign", {
         payer: s0.payerRules?.id ?? "",
+        patientId: s0.patient?.id ?? "",
         formFields: s0.formFields,
+        overrides: s0.overrides,
         attestation,
-        signer,
       });
-      if (res.ok && res.json?.token) {
-        const t = res.json.token;
-        token = { ...token, ts: t.ts, payer: t.payer, digest: t.digest, jti: t.jti, mac: t.mac, serverVerified: true };
-      } else {
-        get().setToast("The signing service did not issue an approval, so this signature is local only and cannot be submitted.");
+      if (!res.ok || !res.json?.token) {
+        const code = res.json?.error?.code;
+        get().setToast(
+          code === "authentication_required"
+            ? "Sign in as a clinician before signing. An approval is minted for an authenticated clinician and for nobody else."
+            : res.json?.error?.message ?? "The signing service did not issue an approval, so nothing was signed."
+        );
+        return null;
       }
+      const t = res.json.token;
+      token = {
+        ts: t.ts,
+        attestation,
+        signer: t.signer,
+        clinicianId: t.clinicianId,
+        npi: t.npi,
+        hash: localHash,
+        payer: t.payer,
+        patientId: t.patientId,
+        digest: t.digest,
+        jti: t.jti,
+        mac: t.mac,
+        serverVerified: true,
+      };
     } catch {
-      // Unreachable or too slow. The signature stays local, which submit will
-      // refuse, and the audit trail records that it was never server-verified.
-      get().setToast("The signing service could not be reached, so this signature is local only and cannot be submitted.");
+      get().setToast("The signing service could not be reached, so nothing was signed. Try again shortly.");
+      return null;
+    }
+
+    // The form can be edited while the request is open. An edit runs
+    // invalidateApproval; writing the token unconditionally here would resurrect
+    // it over values the clinician never saw and clear the voided flag, leaving
+    // a signature on screen that covers a different form. Discard instead.
+    if (hashFields(get().formFields) !== localHash) {
+      get().setToast("The form changed while the signature was being issued, so it was discarded. Review the current values and sign again.");
+      return null;
     }
 
     set((s) => ({
@@ -299,9 +346,9 @@ export const useCoAuth = create<CoAuthState>((set, get) => ({
         {
           ts: token.ts,
           attestation,
-          signer,
+          signer: token.signer,
           hash: token.digest ?? token.hash,
-          verifiedBy: token.serverVerified ? "server" : "client-only",
+          verifiedBy: "server",
         },
       ],
       submitResult: null,
@@ -322,9 +369,11 @@ export const useCoAuth = create<CoAuthState>((set, get) => ({
   reset: () =>
     set({
       patient: null, payerRules: null, docs: [], formFields: {}, attachments: {},
-      validation: null, risk: null, conflicts: [], overrides: {}, suggestions: {}, provenance: {}, appealDraft: null, flags: [],
+      validation: null, validationByField: {}, risk: null, conflicts: [], overrides: {}, suggestions: {}, provenance: {}, appealDraft: null, flags: [],
       approvalToken: null, auditLog: [], activity: [], focusedField: null, submitResult: null,
       signatureVoided: false,
+      // Left stuck across a reset, this blocked every subsequent scripted run.
+      scriptedRun: null,
     }),
 }));
 

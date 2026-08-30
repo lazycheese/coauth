@@ -13,7 +13,13 @@ export interface FieldResult {
 /** Per-field content validators. Return an error message, or null if valid. */
 const FORMAT: Record<string, (v: string) => string | null> = {
   prescriber_npi: (v) => (/^\d{10}$/.test(v.trim()) ? null : "NPI must be exactly 10 digits"),
-  diagnosis_code: (v) => (/^[A-TV-Z]\d{2}(\.\d{1,4})?$/i.test(v.trim()) ? null : "Expected ICD-10 code (e.g. M06.9)"),
+  // ICD-10-CM: a letter, two alphanumerics, then up to four alphanumerics after
+  // an optional dot. The third character and every character after the dot can
+  // be a letter - M1A.00 (chronic gout), C4A.0 (Merkel cell carcinoma) and the
+  // 7th-character extensions like S72.001A are all valid, and a digits-only
+  // pattern rejected every one of them.
+  diagnosis_code: (v) =>
+    /^[A-TV-Z][0-9][0-9A-Z](\.[0-9A-Z]{1,4})?$/i.test(v.trim()) ? null : "Expected ICD-10-CM code (e.g. M06.9, M1A.00, S72.001A)",
   hcpcs_code: (v) => (/^J\d{4}$/i.test(v.trim()) ? null : "Expected HCPCS J-code (e.g. J0135)"),
 };
 

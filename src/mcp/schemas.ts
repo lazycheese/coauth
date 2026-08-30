@@ -23,6 +23,16 @@ const fieldEntries = Array.from(
 );
 const fieldIds = fieldEntries.map((f) => f.id);
 const judgmentFieldIds = fieldEntries.filter((f) => f.requiresHumanJudgment).map((f) => f.id);
+/** What fill_field will accept. The clinician-judgment fields are absent from
+ * the enum rather than merely discouraged in the description: a rule stated in
+ * prose is a rule an agent can decline to follow, and this one is the product's
+ * central promise. The tool refuses them as well, so the schema is a hint and
+ * the executor is the control. */
+const fillableFieldIds = fieldEntries.filter((f) => !f.requiresHumanJudgment).map((f) => f.id);
+const fillableFieldList = fieldEntries
+  .filter((f) => !f.requiresHumanJudgment)
+  .map((f) => `${f.id} (${f.label})`)
+  .join("; ");
 const draftableFieldIds = ["medical_necessity", "step_exception_rationale"];
 
 const fieldList = fieldEntries.map((f) => `${f.id} (${f.label})`).join("; ");
@@ -64,8 +74,8 @@ export const schemas = {
     properties: {
       fieldId: {
         type: "string",
-        enum: fieldIds,
-        description: `Field to set. Call check_payer_rules first: the payer decides which of these are required. Fields: ${fieldList}. Do not fill the clinician-judgment fields (${judgmentFieldIds.join(", ")}); propose text for those with draft_field instead.`,
+        enum: fillableFieldIds,
+        description: `Field to set. Call check_payer_rules first: the payer decides which of these are required. Fields: ${fillableFieldList}. The clinician-judgment fields (${judgmentFieldIds.join(", ")}) are not settable through this tool and will be refused; propose text for those with draft_field, which the clinician accepts or rejects.`,
       },
       value: {
         type: "string",

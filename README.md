@@ -19,18 +19,60 @@ a human is *legally required* to stay in the loop. That combination - agents are
 great at the mechanics, humans are mandatory for judgment - is exactly what
 WebMCP and true human+agent collaboration are for.
 
+## Signing in (for reviewers)
+
+Signing requires an authenticated clinician, so the demo ships with a seeded
+directory and one passphrase:
+
+    Clinician:  Dr. Ana Alvarez  (or Dr. Jae Park)
+    Passphrase: coauth-demo-clinician-2026
+
+The passphrase is deliberately **not** shown anywhere in the page. It is a
+credential, and a credential printed into the DOM is a credential any agent
+driving the page can read - which would quietly reopen the hole the sign-in
+exists to close. So it lives here, where a person reading the repository finds
+it and an agent working the form does not.
+
+That is the trade-off being made, stated plainly: a shared demo passphrase is
+not identity assurance, and a real deployment needs a real identity provider
+and per-clinician credentials. What the demo does establish is the boundary -
+that minting an approval requires something the agent cannot obtain, and that
+the signer recorded in the audit trail is whoever authenticated rather than a
+string in a request body.
+
 ## What the agent can and cannot do
 
 - **Can:** load the patient record, read payer rules, fill every non-judgment
   field, attach evidence, score denial risk, detect clinical conflicts, draft
   the medical-necessity narrative and an appeal letter.
 - **Cannot:** fill a clinician-judgment field, resolve a critical
-  contraindication, or submit. The approval is minted and verified by the server
-  over a digest of the exact submission, using a secret the browser never sees,
-  so a submission is refused when it is unsigned, when the approval was forged,
-  when a field changed after signing, when the approval has already been used,
-  and when it is replayed against a different payer. Those refusals are checked
-  by `npm run verify`.
+  contraindication, or submit.
+
+Both halves of that are enforced in code rather than described in prose, which
+was not true of an earlier version of this project and is worth being explicit
+about:
+
+- `fill_field` **refuses** any field the payer marks as requiring clinician
+  judgment. The judgment field ids are absent from its schema enum and rejected
+  by the executor, so a model that ignores the description still cannot write
+  one. The Review panel additionally refuses to enable signing over a judgment
+  field whose provenance is an agent.
+- An approval is minted **only for an authenticated clinician session**
+  (`POST /api/v1/login`, an HttpOnly cookie the page cannot read). The signer
+  recorded in the token is taken from that session and never from the request
+  body, so the audit trail is not self-asserted. There is no tool, on the page
+  or over MCP, that authenticates.
+- `POST /api/v1/submit` verifies the HMAC over a digest of the exact payer,
+  chart and form, checks the TTL, claims the approval once, **and independently
+  re-runs the same clinical rules the page runs**. Skipping the interface skips
+  none of them.
+
+A submission is refused when it is unsigned, when the approval was forged, when
+a field changed after signing, when the approval has already been used, when it
+is replayed against a different payer or a different patient, when required
+fields are missing or malformed, and when a critical clinical conflict is
+unresolved. Every one of those refusals is exercised by `npm run verify`
+against the live deployment.
 
 ## The 13 WebMCP tools
 

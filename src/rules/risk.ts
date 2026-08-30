@@ -34,42 +34,54 @@ export interface SubmissionContext {
   formFields: Record<string, unknown>;
   patient: Patient | null;
   rules: PayerRules | null;
+  /** Clinician overrides, keyed by conflict id.
+   *
+   * No rule reads this: a rule's job is to report what it finds, and whether a
+   * finding has been overridden is a question for the caller. detectConflicts
+   * returns every conflict, and callers filter on overrides - which is what
+   * lets an overridden conflict still appear in the audit trail and the appeal
+   * letter rather than vanishing. Kept on the context so a future rule can see
+   * a related override without changing every signature. */
   overrides: Record<string, string>;
 }
 
 const str = (v: unknown) => (v == null ? "" : String(v).trim());
 
-/** Longest conventional-DMARD trial in the chart, in months. */
+/** Trials that count towards step therapy.
+ *
+ * Step-therapy criteria are about drugs that were tried and did not work. A
+ * drug the patient is still taking has not failed yet, and a drug that worked
+ * has not failed at all - counting either of them as a failure told the
+ * clinician a criterion was met when it was not. The chart states the outcome;
+ * this reads it rather than inferring it. */
+function failedDmardTrials(patient: Patient | null) {
+  if (!patient) return [];
+  return patient.medsTried.filter((m) => m.klass === "csDMARD" && m.result === "failed");
+}
+
+/** Longest failed conventional-DMARD trial in the chart, in months. */
 function chartDmardMonths(patient: Patient | null): number {
-  if (!patient) return 0;
-  return patient.medsTried
-    .filter((m) => m.klass === "csDMARD")
-    .reduce((mx, m) => Math.max(mx, m.durationMonths), 0);
+  return failedDmardTrials(patient).reduce((mx, m) => Math.max(mx, m.durationMonths), 0);
 }
 
 function chartDmardCount(patient: Patient | null): number {
-  return patient ? patient.medsTried.filter((m) => m.klass === "csDMARD").length : 0;
+  return failedDmardTrials(patient).length;
 }
 
-/** Longest duration the submitted step-therapy narrative documents, in months.
- *
- * Only counts a duration the text actually asserts. A narrative saying a trial
- * ran for "under 3 months" is stating that the requirement was not met, and
- * reading the 3 out of it would let the text satisfy the very criterion it
- * denies. Qualified durations are therefore ignored rather than counted. */
-const UNMET_QUALIFIER = /(?:<|under|less\s+than|fewer\s+than|no\s+more\s+than|up\s+to|only|barely|nearly|almost|approx\.?|approximately|~)\s*$/i;
-
-function narrativeDmardMonths(text: string): number {
-  let max = 0;
-  const consider = (match: RegExpMatchArray, months: number) => {
-    const preceding = text.slice(0, match.index ?? 0);
-    if (UNMET_QUALIFIER.test(preceding)) return;
-    max = Math.max(max, months);
-  };
-  for (const m of text.matchAll(/(\d+)\s*(?:mo|month)/gi)) consider(m, Number(m[1]));
-  for (const m of text.matchAll(/(\d+)\s*(?:yr|year)/gi)) consider(m, Number(m[1]) * 12);
-  return max;
-}
+// The step-therapy narrative is no longer parsed for durations, and this is
+// deliberate.
+//
+// Reading a number out of free text could only ever loosen the criterion: any
+// figure found there was max'd against the chart, so text could satisfy a
+// requirement the record did not support. "Patient has had symptoms for 24
+// months. No DMARD has been started." cleared a three-month DMARD requirement.
+// Guarding the immediately preceding words only caught the phrasings that were
+// tested; the next phrasing walked straight through.
+//
+// The chart is what documents a trial. Where a trial genuinely happened
+// elsewhere and is not in the chart, the route is the step-therapy exception
+// rationale - a clinician-judgment field, signed for - rather than a sentence a
+// tool can write.
 
 /** Every rule reads the submission, so what the agent fills changes the outcome. */
 type Rule = (c: SubmissionContext) => Conflict | null;
@@ -129,16 +141,31 @@ const RULES: Rule[] = [
     const drug = getDrug(str(formFields["hcpcs_code"]));
     const dose = str(formFields["dose"]);
     if (!drug || !dose) return null;
-    const m = dose.match(/(\d+(?:\.\d+)?)\s*mg/i);
-    if (!m) return null;
-    const mg = Number(m[1]);
+    // Match the unit as well as the number. Anchoring on "mg" alone let "40
+    // mcg" - a thousand-fold underdose - pass without comment, because the
+    // pattern simply did not match and the rule returned null.
+    const m = dose.match(/(\d+(?:\.\d+)?)\s*(mcg|micrograms?|ug|mg|milligrams?|g|grams?)\b/i);
+    if (!m) {
+      return {
+        id: "dose-unreadable",
+        severity: "high",
+        label: "Dose is not in a readable form",
+        detail: `"${dose}" does not state a dose and a unit that can be checked against the label for ${drug.name}. Write it as a number and a unit, for example "40 mg every other week".`,
+        requiresHumanOverride: false,
+        points: CONFLICT["dose-unreadable"].points,
+        weightRationale: CONFLICT["dose-unreadable"].because,
+      };
+    }
+    const unit = m[2].toLowerCase();
+    const toMg = unit.startsWith("mc") || unit === "ug" ? 0.001 : unit.startsWith("g") ? 1000 : 1;
+    const mg = Number(m[1]) * toMg;
     const [lo, hi] = drug.doseMgRange;
     if (mg < lo || mg > hi) {
       return {
         id: "dose-out-of-range",
         severity: "high",
         label: "Dose is outside the labelled range",
-        detail: `${mg} mg is outside the ${lo}-${hi} mg range for ${drug.name}. Payers routinely deny doses they cannot match to the label.`,
+        detail: `${m[1]} ${unit} is ${mg} mg, outside the ${lo}-${hi} mg labelled range for ${drug.name} (${drug.doseNote}). Payers routinely deny doses they cannot match to the label.`,
         requiresHumanOverride: false,
         points: CONFLICT["dose-out-of-range"].points,
       weightRationale: CONFLICT["dose-out-of-range"].because,
@@ -182,20 +209,47 @@ const RULES: Rule[] = [
     };
   },
 
-  // Biologic requires TB screening evidence on the submission.
-  ({ formFields }) => {
+  // Biologic requires TB screening evidence on the submission, and the evidence
+  // has to be a screening result rather than any non-empty string. Accepting
+  // whatever was typed meant "not done, pending" satisfied the requirement.
+  ({ formFields, patient }) => {
     const drug = getDrug(str(formFields["hcpcs_code"]));
     if (!drug?.requiresTbScreen) return null;
-    if (str(formFields["tb_screen"])) return null;
-    return {
-      id: "tb-evidence-missing",
-      severity: "high",
-      label: "No TB screening evidence attached",
-      detail: `${drug.name} requires documented TB screening before initiation. Attach the screening result to the submission.`,
-      requiresHumanOverride: false,
-      points: CONFLICT["tb-evidence-missing"].points,
-      weightRationale: CONFLICT["tb-evidence-missing"].because,
-    };
+    const value = str(formFields["tb_screen"]);
+    if (!value) {
+      return {
+        id: "tb-evidence-missing",
+        severity: "high",
+        label: "No TB screening evidence attached",
+        detail: `${drug.name} requires documented TB screening before initiation. Attach the screening result to the submission.`,
+        requiresHumanOverride: false,
+        points: CONFLICT["tb-evidence-missing"].points,
+        weightRationale: CONFLICT["tb-evidence-missing"].because,
+      };
+    }
+    // Either the attached screening document, or text that states a result the
+    // chart's own lab agrees with.
+    const lab = patient?.labs.find((l) => /TB|QuantiFERON/i.test(l.name));
+    const attached = value === "doc-tb";
+    const statesResult = /\b(negative|positive|non-?reactive|reactive)\b/i.test(value);
+    const agreesWithChart =
+      !lab || !statesResult
+        ? false
+        : /negative|non-?reactive/i.test(value) === /negative/i.test(lab.value);
+    if (!attached && !(statesResult && agreesWithChart)) {
+      return {
+        id: "tb-evidence-unusable",
+        severity: "high",
+        label: "TB screening evidence does not state a result",
+        detail: lab
+          ? `"${value}" is not a screening result that can be checked. The chart records TB (${lab.name}) as ${lab.value} on ${lab.date}. Attach the screening document, or record the result the chart supports.`
+          : `"${value}" is not a screening result. Attach the TB screening document.`,
+        requiresHumanOverride: false,
+        points: CONFLICT["tb-evidence-unusable"].points,
+        weightRationale: CONFLICT["tb-evidence-unusable"].because,
+      };
+    }
+    return null;
   },
 
   // Step therapy, judged against the payer's numeric criteria using the chart
@@ -203,19 +257,19 @@ const RULES: Rule[] = [
   ({ formFields, patient, rules }) => {
     if (!rules) return null;
     const { minDmardMonths, minDmardCount } = rules.criteria;
-    const months = Math.max(chartDmardMonths(patient), narrativeDmardMonths(str(formFields["step_therapy"])));
+    const months = chartDmardMonths(patient);
     const count = chartDmardCount(patient);
     const shortTrial = months < minDmardMonths;
     const tooFew = count < minDmardCount;
     if (!shortTrial && !tooFew) return null;
     const reasons: string[] = [];
-    if (shortTrial) reasons.push(`longest documented trial is ${months} month(s) against a ${minDmardMonths}-month requirement`);
-    if (tooFew) reasons.push(`${count} conventional DMARD(s) documented against a minimum of ${minDmardCount}`);
+    if (shortTrial) reasons.push(`longest failed trial in the chart is ${months} month(s) against a ${minDmardMonths}-month requirement`);
+    if (tooFew) reasons.push(`${count} failed conventional DMARD(s) in the chart against a minimum of ${minDmardCount}`);
     return {
       id: "step-insufficient",
       severity: "high",
       label: "Step-therapy criteria not met",
-      detail: `${rules.name} requires ${minDmardCount} conventional DMARD(s) tried for at least ${minDmardMonths} months: ${reasons.join("; ")}. Document a step-therapy exception rationale or extend the trial.`,
+      detail: `${rules.name} requires ${minDmardCount} conventional DMARD(s) tried and failed for at least ${minDmardMonths} months: ${reasons.join("; ")}. Only trials the chart records as failed are counted; ongoing therapy and therapy that responded do not qualify. Document a step-therapy exception rationale, or extend the trial.`,
       requiresHumanOverride: false,
       points: CONFLICT["step-insufficient"].points,
       weightRationale: CONFLICT["step-insufficient"].because,

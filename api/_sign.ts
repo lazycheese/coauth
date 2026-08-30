@@ -1,11 +1,20 @@
 // Server-side signing for the clinician approval gate.
 //
 // The point of the gate is that an agent cannot submit on a human's behalf.
-// A client-side check cannot provide that, because anything running in the page
-// can set client state. So the signature is minted and verified here, with a
-// secret the browser never sees, over a canonical serialization of the exact
-// form that was signed. An agent can neither forge a token nor alter the form
-// after signing without invalidating it.
+// That needs two separate things, and an earlier version of this file had only
+// the second:
+//
+//   1. Minting must require a credential an agent does not have. The signing
+//      route demands an authenticated clinician session (see _session.ts) and
+//      takes the signer's identity from that session, never from the request
+//      body. Without it, minting was open to anyone who could make an HTTP
+//      request, and the "signer" was whatever string the caller supplied.
+//   2. The token must be unforgeable and bound to what was signed. The MAC is
+//      computed here with a secret the browser never sees, over a canonical
+//      serialization of the payer, the chart and the exact form.
+//
+// Together: an agent cannot obtain a token, and a token cannot be altered or
+// moved to a different form after the fact.
 
 const enc = new TextEncoder();
 
@@ -32,8 +41,15 @@ async function hmac(secret: string, message: string): Promise<string> {
 
 export interface ApprovalPayload {
   payer: string;
+  /** Chart the submission was prepared from, so it cannot be moved to another. */
+  patientId: string;
   attestation: string;
+  /** Display name of the authenticated clinician. Never caller-supplied. */
   signer: string;
+  /** Directory id of the authenticated clinician, from the session. */
+  clinicianId: string;
+  /** The clinician's NPI as held by the directory, not as typed. */
+  npi: string;
   ts: number;
   digest: string;
   /** Unique id for this approval, covered by the MAC so it cannot be swapped. */
@@ -47,9 +63,17 @@ export function newJti(): string {
   return Array.from(b).map((x) => x.toString(16).padStart(2, "0")).join("");
 }
 
-/** Digest of the submission being attested to. */
-export async function digestOf(secret: string, payer: string, formFields: Record<string, unknown>): Promise<string> {
-  return hmac(secret, `${payer}\n${canonicalize(formFields)}`);
+/** Digest of the submission being attested to.
+ *
+ * Covers the chart as well as the payer and the form, so an approval given for
+ * one patient cannot be presented for another whose form happens to match. */
+export async function digestOf(
+  secret: string,
+  payer: string,
+  patientId: string,
+  formFields: Record<string, unknown>
+): Promise<string> {
+  return hmac(secret, `${payer}\n${patientId}\n${canonicalize(formFields)}`);
 }
 
 export async function mint(

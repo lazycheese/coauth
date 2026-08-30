@@ -1,28 +1,52 @@
 import { signingSecret, digestOf, mint, newJti, type ApprovalPayload } from "../_sign";
+import { readSession, sameOrigin } from "../_session";
+import { clinicalRefusal } from "../_clinical";
 
 export const config = { runtime: "edge" };
 
+const H = { "API-Version": "1.0.0", "Cache-Control": "no-store" };
+
+function err(status: number, code: string, message: string, hint: string, detail?: unknown) {
+  return Response.json({ error: { code, message, hint, ...(detail ? { detail } : {}) } }, { status, headers: H });
+}
+
 /** Mint a clinician approval token over the exact submission being attested to.
- * Only a human review step in the UI should call this. */
+ *
+ * Three things must hold, and each is checked here rather than in the page:
+ *   - the caller holds an authenticated clinician session;
+ *   - the submission passes the same clinical rules the page runs;
+ *   - the identity recorded in the token comes from the session.
+ *
+ * The last one matters most. The signer used to be a string in the request
+ * body, which made the audit trail self-asserted: a caller could name anyone.
+ * It is now whoever authenticated, and nothing the caller sends can change it. */
 export default async function handler(req: Request): Promise<Response> {
   if (req.method !== "POST") {
-    return Response.json(
-      { error: { code: "method_not_allowed", message: "Use POST.", hint: "POST { payer, formFields, attestation, signer }." } },
-      { status: 405, headers: { "API-Version": "1.0.0" } }
-    );
+    return err(405, "method_not_allowed", "Use POST.", "POST { payer, patientId, formFields, attestation }.");
+  }
+  if (!sameOrigin(req)) {
+    return err(403, "cross_origin", "Approvals are minted for this origin only.", "Sign from the CoAuth page.");
   }
 
   const secret = signingSecret();
   if (!secret) {
-    return Response.json(
-      {
-        error: {
-          code: "signing_unavailable",
-          message: "No signing secret is configured on this deployment.",
-          hint: "Set COAUTH_SIGNING_SECRET. Without it the approval gate cannot be enforced server-side.",
-        },
-      },
-      { status: 503, headers: { "API-Version": "1.0.0" } }
+    return err(
+      503,
+      "signing_unavailable",
+      "No signing secret is configured on this deployment.",
+      "Set COAUTH_SIGNING_SECRET. Without it the approval gate cannot be enforced, so nothing is signed and nothing can be submitted."
+    );
+  }
+
+  // The gate. An agent driving the page has no tool that authenticates and
+  // cannot read the HttpOnly session cookie, so it cannot reach this point.
+  const session = await readSession(req);
+  if (!session) {
+    return err(
+      401,
+      "authentication_required",
+      "Only an authenticated clinician can sign a prior authorization.",
+      "POST /api/v1/login with a clinician id and passphrase first. An agent cannot obtain this session."
     );
   }
 
@@ -30,42 +54,44 @@ export default async function handler(req: Request): Promise<Response> {
   try {
     body = await req.json();
   } catch {
-    return Response.json(
-      { error: { code: "invalid_json", message: "Body must be JSON.", hint: "POST { payer, formFields, attestation, signer }." } },
-      { status: 400, headers: { "API-Version": "1.0.0" } }
-    );
+    return err(400, "invalid_json", "Body must be JSON.", "POST { payer, patientId, formFields, attestation }.");
   }
 
   const payer = String(body?.payer ?? "");
+  const patientId = String(body?.patientId ?? "");
   const attestation = String(body?.attestation ?? "");
-  const signer = String(body?.signer ?? "");
   const formFields = (body?.formFields ?? {}) as Record<string, unknown>;
+  const overrides = (body?.overrides ?? {}) as Record<string, string>;
 
-  if (!payer || !attestation || !signer) {
-    return Response.json(
-      {
-        error: {
-          code: "incomplete_approval",
-          message: "payer, attestation and signer are all required.",
-          hint: "An attestation with no identifiable signer is not an approval.",
-        },
-      },
-      { status: 400, headers: { "API-Version": "1.0.0" } }
+  if (!payer || !patientId || !attestation) {
+    return err(
+      400,
+      "incomplete_approval",
+      "payer, patientId and attestation are all required.",
+      "An attestation with no chart behind it is not an approval."
     );
+  }
+
+  // The same rules the page ran, run again here. A submission that cannot be
+  // submitted should not be signable either: refusing at mint time means the
+  // clinician is never asked to attest to something the server will reject.
+  const refusal = clinicalRefusal(payer, patientId, formFields, overrides);
+  if (refusal) {
+    return err(422, refusal.code, refusal.message, refusal.hint, refusal.detail);
   }
 
   const payload: ApprovalPayload = {
     payer,
+    patientId,
     attestation,
-    signer,
+    signer: session.name,
+    clinicianId: session.sub,
+    npi: session.npi,
     ts: Date.now(),
-    digest: await digestOf(secret, payer, formFields),
+    digest: await digestOf(secret, payer, patientId, formFields),
     jti: newJti(),
   };
   const mac = await mint(secret, payload);
 
-  return Response.json(
-    { status: "signed", token: { ...payload, mac } },
-    { status: 200, headers: { "API-Version": "1.0.0" } }
-  );
+  return Response.json({ status: "signed", token: { ...payload, mac } }, { status: 200, headers: H });
 }

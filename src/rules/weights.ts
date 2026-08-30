@@ -82,6 +82,16 @@ export const CONFLICT: Record<string, Weighted> = {
     because:
       "A dose the payer cannot match to the label invites a denial or a downward adjustment, but is frequently resolved by a pharmacist rather than refused.",
   },
+  "dose-unreadable": {
+    points: 14,
+    because:
+      "A dose that cannot be parsed cannot be checked against the label at all. It is weighted below an out-of-range dose because the likeliest cause is formatting rather than a wrong dose, but it cannot be waved through: an unreadable dose is how a thousand-fold unit error reaches a payer unexamined.",
+  },
+  "tb-evidence-unusable": {
+    points: 18,
+    because:
+      "Weighted the same as missing screening evidence, because that is what it is. A field holding \"not done, pending\" documents the absence of a screen, and treating any text as satisfaction of the requirement is how an unscreened patient reaches a biologic.",
+  },
   "tb-evidence-missing": {
     points: 18,
     because:

@@ -3,25 +3,33 @@ import type { RiskAssessment, Conflict } from "./risk";
 
 /** A trial is only "tried and failed" when the record says it failed.
  * Anything still running is reported as ongoing, never as failure. */
-const FAILED_RE = /inadequate|intoleran|discontinued|fail|adverse|contraindicat/i;
-const ONGOING_RE = /ongoing|continuing|current|partial/i;
+// How a trial ended is read from the chart's structured `result`, never from
+// the wording of the note.
+//
+// This used to be substring matching over the free-text outcome, which is
+// negation-blind: "Excellent response, no adverse events" matched on "adverse"
+// and was printed to a payer as "Tried and failed", and "Good response;
+// contraindication ruled out" matched on "contraindicat". Asserting a treatment
+// failure the record contradicts, in a letter a clinician signs, is a false
+// claim to an insurer - so the inference is gone rather than improved.
 
 interface TrialSplit {
   failed: Patient["medsTried"];
   ongoing: Patient["medsTried"];
-  unclear: Patient["medsTried"];
+  /** Responded, or outcome not recorded. Neither supports a failure claim. */
+  responded: Patient["medsTried"];
 }
 
 function splitTrials(patient: Patient): TrialSplit {
   const failed: Patient["medsTried"] = [];
   const ongoing: Patient["medsTried"] = [];
-  const unclear: Patient["medsTried"] = [];
+  const responded: Patient["medsTried"] = [];
   for (const m of patient.medsTried) {
-    if (FAILED_RE.test(m.outcome)) failed.push(m);
-    else if (ONGOING_RE.test(m.outcome)) ongoing.push(m);
-    else unclear.push(m);
+    if (m.result === "failed") failed.push(m);
+    else if (m.result === "ongoing") ongoing.push(m);
+    else responded.push(m);
   }
-  return { failed, ongoing, unclear };
+  return { failed, ongoing, responded };
 }
 
 const describe = (m: Patient["medsTried"][number]) =>
@@ -47,13 +55,13 @@ export function draftFor(
 ): string | null {
   if (!patient) return null;
   const dx = patient.diagnoses[0];
-  const { failed, ongoing, unclear } = splitTrials(patient);
+  const { failed, ongoing, responded } = splitTrials(patient);
   const crp = patient.labs.find((l) => l.name === "CRP")?.value;
 
   const trialLines: string[] = [];
   if (failed.length) trialLines.push(`Tried and failed: ${failed.map(describe).join("; ")}.`);
   if (ongoing.length) trialLines.push(`Currently ongoing (no failure documented): ${ongoing.map(describe).join("; ")}.`);
-  if (unclear.length) trialLines.push(`Outcome not documented: ${unclear.map(describe).join("; ")}.`);
+  if (responded.length) trialLines.push(`Responded or outcome not recorded (does not support a failure claim): ${responded.map(describe).join("; ")}.`);
   if (!trialLines.length) trialLines.push("No prior conventional therapy is documented in the record.");
 
   switch (fieldId) {
@@ -93,25 +101,62 @@ export function draftAppeal(
 ): string | null {
   if (!patient || !rules) return null;
   const dx = patient.diagnoses[0];
-  const { failed, ongoing, unclear } = splitTrials(patient);
+  const { failed, ongoing, responded } = splitTrials(patient);
 
   const therapyLines: string[] = [];
   if (failed.length) therapyLines.push(`- Tried and failed: ${failed.map(describe).join("; ")}.`);
   if (ongoing.length) therapyLines.push(`- Ongoing, no failure documented: ${ongoing.map(describe).join("; ")}.`);
-  if (unclear.length) therapyLines.push(`- Outcome not documented: ${unclear.map(describe).join("; ")}.`);
+  if (responded.length) therapyLines.push(`- Responded or outcome not recorded, so not offered as a failure: ${responded.map(describe).join("; ")}.`);
   if (!therapyLines.length) therapyLines.push("- No prior conventional therapy documented.");
 
   const resolved = conflicts.filter((c) => overrides[c.id]);
   const outstanding = conflicts.filter((c) => !overrides[c.id]);
 
   const conflictLines: string[] = [];
+
+  // The screening section states what the chart records, before it states what
+  // the rules engine found.
+  //
+  // Those are not the same thing, and treating them as the same produced a
+  // letter that read "No clinical conflicts were detected in the record" for a
+  // QuantiFERON-positive patient. The TB rule needs a drug on the form before
+  // it can fire, so on an incomplete submission it had simply not run - and the
+  // letter reported that silence as a clean screen, under a preamble promising
+  // the statements were drawn from the record.
+  const tbLab = patient.labs.find((l) => /TB|QuantiFERON/i.test(l.name));
+  if (tbLab) {
+    conflictLines.push(
+      `- TB screening on record: ${tbLab.name} ${tbLab.value} (${tbLab.date}).` +
+        (/positive|reactive/i.test(tbLab.value)
+          ? " A positive screen is a contraindication to TNF-inhibitor therapy until latent TB is treated, and must be addressed before this therapy begins."
+          : "")
+    );
+  } else {
+    conflictLines.push("- No TB screening result is recorded in the chart.");
+  }
+  const otherAbnormal = patient.labs.filter((l) => l.flag === "critical" && l !== tbLab);
+  for (const l of otherAbnormal) {
+    conflictLines.push(`- Flagged as critical on record: ${l.name} ${l.value} (${l.date}).`);
+  }
+
   for (const c of resolved) {
     conflictLines.push(`- ${c.label}: clinician override on file - ${overrides[c.id]}`);
   }
   for (const c of outstanding) {
     conflictLines.push(`- ${c.label}: OUTSTANDING - not yet addressed by the clinician.`);
   }
-  if (!conflictLines.length) conflictLines.push("- No clinical conflicts were detected in the record.");
+
+  // Several rules key off the requested drug, so on a submission without one
+  // they cannot have run. Saying so is the honest report; saying nothing was
+  // found is not.
+  const drugOnForm = String(formFields["hcpcs_code"] ?? "").trim();
+  if (!drugOnForm) {
+    conflictLines.push(
+      "- Drug-specific contraindication checks have NOT been run: no drug is on the submission yet, so this section is incomplete."
+    );
+  } else if (!resolved.length && !outstanding.length) {
+    conflictLines.push("- The automated checks found no further conflicts on this submission.");
+  }
 
   const drivers = (risk?.factors ?? []).map((f) => `- ${f.label}`).join("\n") || "- Administrative or documentation gaps.";
 

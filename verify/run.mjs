@@ -128,6 +128,16 @@ async function verifyApprovalGate() {
   }
 
   const badCreds = await post("/api/v1/login", { clinicianId: "a-alvarez", passphrase: "wrong-passphrase" });
+  if (badCreds.status === 429) {
+    // The throttle check at the end of a previous run spent this caller's
+    // budget. Say so plainly instead of reporting it as a refusal that failed.
+    bad(
+      "the suite can sign in",
+      "a fresh sign-in budget",
+      "throttled from an earlier run; wait for the window to lapse before re-running"
+    );
+    return;
+  }
   check("a wrong passphrase is refused", badCreds.status, 401);
 
   const login = await post("/api/v1/login", { clinicianId: "a-alvarez", passphrase });
@@ -140,8 +150,28 @@ async function verifyApprovalGate() {
   check("the session cookie is HttpOnly", /httponly/i.test(login.headers.get("set-cookie") ?? ""), true);
 
   const auth = { cookie };
+  // A session is not enough. Any script in the page carries the cookie, so the
+  // credential is required again at the moment of signing.
+  const noCredential = await post(
+    "/api/v1/sign",
+    { payer: "uhc", patientId: "jane-doe", formFields: JANE_FORM, attestation: "I attest.", signer: "ignored" },
+    auth
+  );
+  check("a session alone cannot mint an approval", noCredential.json?.error?.code, "reauthentication_required");
+
+  const wrongCredential = await post(
+    "/api/v1/sign",
+    { payer: "uhc", patientId: "jane-doe", formFields: JANE_FORM, attestation: "I attest.", passphrase: "not-the-passphrase" },
+    auth
+  );
+  check("a wrong credential at signing time is refused", wrongCredential.json?.error?.code, "reauthentication_required");
+
   const signOne = async (form = JANE_FORM, payer = "uhc", patientId = "jane-doe") =>
-    (await post("/api/v1/sign", { payer, patientId, formFields: form, attestation: "I attest.", signer: "ignored" }, auth)).json?.token;
+    (await post(
+      "/api/v1/sign",
+      { payer, patientId, formFields: form, attestation: "I attest.", signer: "ignored", passphrase },
+      auth
+    )).json?.token;
 
   // 2. The signer is the session, not the request.
   const token = await signOne();
@@ -152,7 +182,7 @@ async function verifyApprovalGate() {
   // 3. The clinical rules run server-side at mint time.
   const incomplete = await post(
     "/api/v1/sign",
-    { payer: "uhc", patientId: "jane-doe", formFields: { member_id: "UHC-88213" }, attestation: "I attest.", signer: "x" },
+    { payer: "uhc", patientId: "jane-doe", formFields: { member_id: "UHC-88213" }, attestation: "I attest.", signer: "x", passphrase },
     auth
   );
   check("an incomplete submission cannot be signed", incomplete.json?.error?.code, "incomplete_submission");
@@ -224,7 +254,7 @@ async function verifyApprovalGate() {
   };
   const marcusSigned = await post(
     "/api/v1/sign",
-    { payer: "uhc", patientId: "marcus-lee", formFields: marcusForm, attestation: "I attest.", signer: "x" },
+    { payer: "uhc", patientId: "marcus-lee", formFields: marcusForm, attestation: "I attest.", signer: "x", passphrase },
     auth
   );
   check(
@@ -243,7 +273,7 @@ async function verifyApprovalGate() {
   const realRationale = { "tb-contra": "Latent TB treated (INH x9 months, completed 2026-06); ID cleared for biologic." };
   const overrideSigned = await post(
     "/api/v1/sign",
-    { payer: "uhc", patientId: "marcus-lee", formFields: marcusOverrideForm, overrides: realRationale, attestation: "I attest.", signer: "x" },
+    { payer: "uhc", patientId: "marcus-lee", formFields: marcusOverrideForm, overrides: realRationale, attestation: "I attest.", signer: "x", passphrase },
     auth
   );
   const overrideToken = overrideSigned.json?.token;
@@ -252,7 +282,7 @@ async function verifyApprovalGate() {
   } else {
     const swapped = await post("/api/v1/submit", {
       payer: "uhc", patientId: "marcus-lee", formFields: marcusOverrideForm,
-      overrides: { "tb-contra": "ignore, this is fine" },
+      overrides: { "tb-contra": "a different rationale entirely, long enough to be documented" },
       token: overrideToken,
     });
     check("the override cannot be swapped after signing", swapped.json?.error?.code, "form_modified");
@@ -282,7 +312,66 @@ async function verifyApprovalGate() {
   const proto = await post("/api/v1/login", { clinicianId: "constructor", passphrase });
   check("a prototype-chain clinician id is not a clinician", proto.status, 401);
 
-  // 8. Sign-out actually ends the session.
+  // 8. The new blocking clinical rules, exercised rather than asserted.
+  //
+  //    Each of these was added as a safety control and shipped with no data
+  //    that reached it. A rule nothing tests is a claim, not a control.
+  const signAttempt = async (patientId, fields, overrides = {}) =>
+    (await post(
+      "/api/v1/sign",
+      { payer: "uhc", patientId, formFields: fields, overrides, attestation: "I attest.", signer: "x", passphrase },
+      auth
+    )).json;
+
+  // Priya Raman: TB screen dated 2023, and an active infection on the chart.
+  // Her result is recorded as text rather than as the attached document, so the
+  // recency window is judged on the chart lab - which is dated 2023.
+  const priyaForm = { ...JANE_FORM, member_id: "UHC-41277", tb_screen: "Negative (QuantiFERON)" };
+  const priya = await signAttempt("priya-raman", priyaForm);
+  check("a chart with an active infection cannot be signed", priya?.error?.code, "critical_conflict");
+  const priyaIds = (priya?.error?.detail ?? []).map((d) => d.id);
+  priyaIds.includes("active-infection")
+    ? ok("the boxed-warning active-infection rule fires", priyaIds.join(", "))
+    : bad("active infection is caught", "active-infection", priyaIds.join(", ") || "none");
+  priyaIds.includes("tb-screen-stale")
+    ? ok("a three-year-old TB screen is caught by the payer's recency window")
+    : bad("a stale TB screen is caught", "tb-screen-stale", priyaIds.join(", ") || "none");
+
+  // A thousand-fold unit error.
+  const microDose = await signAttempt("jane-doe", { ...JANE_FORM, dose: "40 mcg every other week" });
+  check("a thousand-fold dose error cannot be signed", microDose?.error?.code, "critical_conflict");
+
+  // A dose with no readable unit.
+  const noUnit = await signAttempt("jane-doe", { ...JANE_FORM, dose: "40 EOW" });
+  check("a dose with no readable unit cannot be signed", noUnit?.error?.code, "critical_conflict");
+
+  // An induction amount written as an ongoing weekly schedule.
+  const weekly = await signAttempt("jane-doe", { ...JANE_FORM, dose: "160 mg every week" });
+  check("an induction dose on a weekly schedule cannot be signed", weekly?.error?.code, "critical_conflict");
+
+  // TB evidence that states no result.
+  const unusable = await signAttempt("jane-doe", { ...JANE_FORM, tb_screen: "not done, pending" });
+  check("TB evidence that states no result cannot be signed", unusable?.error?.code, "critical_conflict");
+
+  // An override has to say something. The interface asks for eight characters;
+  // the server used to accept any truthy value.
+  const thin = await signAttempt("priya-raman", priyaForm, { "active-infection": "ok", "tb-screen-stale": "ok" });
+  check("a two-character override is not a documented rationale", thin?.error?.code, "override_not_documented");
+
+  // And a real one lets the clinician proceed.
+  const documented = await signAttempt("priya-raman", priyaForm, {
+    "active-infection": "Cellulitis treated to resolution, completed 2026-08-20; ID cleared to start.",
+    "tb-screen-stale": "QuantiFERON repeated 2026-08-25, negative; report being scanned into the chart.",
+  });
+  check("a documented override lets the clinician sign", documented?.status, "signed");
+
+  // 9. The directory is not handed to anonymous callers.
+  const anon = await (await fetch(BASE + "/api/v1/session")).json();
+  anon?.clinicians === undefined
+    ? ok("the clinician directory is not published to anonymous callers")
+    : bad("the directory is not public", "no clinicians field", JSON.stringify(anon.clinicians).slice(0, 80));
+
+  // 10. Sign-out actually ends the session.
   const out = await fetch(BASE + "/api/v1/session", { method: "DELETE", headers: auth });
   check("a clinician can sign out", out.status, 200);
 }
@@ -487,6 +576,7 @@ async function verifyInBrowser() {
       const attest = await page.$("[data-testid=attest-checkbox]:not([disabled])");
       if (attest) {
         await page.check("[data-testid=attest-checkbox]");
+        await page.fill("[data-testid=sign-passphrase]", process.env.COAUTH_CLINICIAN_PASSPHRASE ?? "");
         await page.click("[data-testid=approve-sign]");
         await page.waitForSelector("[data-testid=submit-btn]:not([disabled])", { timeout: 20000 });
         await page.click("[data-testid=submit-btn]");
@@ -641,11 +731,20 @@ async function verifyRules(page) {
   await setField("member_id", "UHC-88213");
 
   // A dose the payer cannot match to the label is caught.
-  await setField("dose", "800 mg daily");
+  // Two bands, because they mean different things. A dose above the label is
+  // something a payer argues about; a dose off by an order of magnitude is a
+  // unit or decimal error and blocks signature.
+  await setField("dose", "300 mg every other week");
   const dose = await conflicts();
   dose.includes("dose-out-of-range")
-    ? ok("a dose outside the labelled range is caught")
-    : bad("a dose outside the labelled range is caught", "dose-out-of-range", dose.join(", ") || "none");
+    ? ok("a dose above the labelled range is flagged")
+    : bad("a dose above the labelled range is flagged", "dose-out-of-range", dose.join(", ") || "none");
+
+  await setField("dose", "800 mg daily");
+  const grossDose = await conflicts();
+  grossDose.includes("dose-implausible")
+    ? ok("a dose off by an order of magnitude is treated as an error, not a preference")
+    : bad("a gross dose error is caught", "dose-implausible", grossDose.join(", ") || "none");
   await setField("dose", "40 mg SC every other week");
 
   // A drug the payer file does not cover is caught. Aetna covers adalimumab only.
@@ -740,7 +839,7 @@ async function signInAsClinician(page) {
   if (!passphrase) return false;
   const signin = await page.$("[data-testid=clinician-signin]");
   if (!signin) return true; // already authenticated in this browser context
-  await page.selectOption("[data-testid=signin-clinician]", "a-alvarez");
+  await page.fill("[data-testid=signin-clinician]", "a-alvarez");
   await page.fill("[data-testid=signin-passphrase]", passphrase);
   await page.click("[data-testid=signin-submit]");
   await page.waitForSelector("[data-testid=signer-identity]", { timeout: 15000 });
@@ -779,6 +878,7 @@ async function verifyDoubleSubmit(page) {
     return;
   }
   await page.check("[data-testid=attest-checkbox]");
+  await page.fill("[data-testid=sign-passphrase]", process.env.COAUTH_CLINICIAN_PASSPHRASE ?? "");
   await page.click("[data-testid=approve-sign]");
   await page.waitForSelector("[data-testid=submit-btn]:not([disabled])", { timeout: 20000 });
 
@@ -836,6 +936,7 @@ async function verifySignatureVoiding(page) {
     return;
   }
   await page.check("[data-testid=attest-checkbox]");
+  await page.fill("[data-testid=sign-passphrase]", process.env.COAUTH_CLINICIAN_PASSPHRASE ?? "");
   await page.click("[data-testid=approve-sign]");
   await page.waitForSelector("[data-testid=submit-btn]", { timeout: 20000 });
 
@@ -1106,7 +1207,15 @@ async function verifyLoginThrottle() {
   let sawThrottle = false;
   let attempts = 0;
   for (; attempts < 60 && !sawThrottle; attempts++) {
-    const attempt = await post("/api/v1/login", { clinicianId: "a-alvarez", passphrase: `guess-${attempts}` });
+    // A distinct source address. On a deployment the platform's own header
+    // wins, so this still spends the real budget; locally it keeps the check
+    // from exhausting the budget the rest of the suite needs, which otherwise
+    // made a second run in the same window report failures that were not real.
+    const attempt = await post(
+      "/api/v1/login",
+      { clinicianId: "a-alvarez", passphrase: `guess-${attempts}` },
+      { "x-forwarded-for": "203.0.113.7" }
+    );
     if (attempt.status === 429) sawThrottle = true;
     else if (attempt.status !== 401) {
       bad("a wrong passphrase is refused while guessing", "401 or 429", String(attempt.status));

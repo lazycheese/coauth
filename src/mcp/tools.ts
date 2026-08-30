@@ -1,5 +1,5 @@
 import { useCoAuth } from "../store/coauthStore";
-import { docsFor, getPatient, getPayerRules, resolveSourceValue } from "../data/seed";
+import { docsFor, getPatient, getPayerRules, resolveSourceValue, isJudgmentField, knownField } from "../data/seed";
 import { draftFor, draftAppeal } from "../rules/drafts";
 import { scanRecord, injectionWarning, fenceUntrusted } from "../rules/untrusted";
 import { BASE, BANDS, CLAMP, weightRationale } from "../rules/weights";
@@ -125,8 +125,22 @@ export const tools: ToolDef[] = [
       // earlier version stated this in the schema description and in the
       // workflow guidance, and enforced it nowhere, so an agent could set the
       // attending attestation and the form would report itself ready to sign.
-      const field = store().payerRules?.requiredFields.find((f) => f.id === fieldId);
-      if (field?.requiresHumanJudgment) {
+      // Resolved from the static catalogue, so the answer does not depend on
+      // whether check_payer_rules has run. An unknown id is refused rather than
+      // written: a value nothing validates is worse than a rejected call.
+      const known = knownField(fieldId);
+      if (!known) {
+        store().logActivity(actorOf(ctx), "fill_field", `REFUSED - ${fieldId} is not a field on any payer form`);
+        return {
+          status: "refused",
+          isError: true,
+          summary: `No payer form has a field called "${fieldId}". Call check_payer_rules to see the fields the current payer requires.`,
+          fieldId,
+          useInstead: "check_payer_rules",
+        };
+      }
+      const field = known;
+      if (isJudgmentField(fieldId)) {
         store().logActivity(actorOf(ctx), "fill_field", `REFUSED - ${fieldId} is a clinician-judgment field`);
         return {
           status: "refused",
@@ -163,12 +177,22 @@ export const tools: ToolDef[] = [
     destructiveHint: false,
     idempotentHint: true,
     execute: ({ fieldId, docId }, ctx?: ToolCtx) => {
-      const target = store().payerRules?.requiredFields.find((f) => f.id === fieldId);
+      const target = knownField(fieldId);
+      if (!target) {
+        store().logActivity(actorOf(ctx), "attach_evidence", `REFUSED - ${fieldId} is not a field on any payer form`);
+        return {
+          status: "refused",
+          isError: true,
+          summary: `No payer form has a field called "${fieldId}". Call check_payer_rules to see the fields the current payer requires.`,
+          fieldId,
+          useInstead: "check_payer_rules",
+        };
+      }
       // The same gate fill_field applies. Guarding one write path and leaving
       // the other open meant an agent could put a document id over the
       // attending attestation and clear the clinician's outstanding work - and
       // silently overwrite any prose already typed into it.
-      if (target?.requiresHumanJudgment) {
+      if (isJudgmentField(fieldId)) {
         store().logActivity(actorOf(ctx), "attach_evidence", `REFUSED - ${fieldId} is a clinician-judgment field`);
         return {
           status: "refused",
@@ -179,7 +203,7 @@ export const tools: ToolDef[] = [
           useInstead: "draft_field",
         };
       }
-      if (target && target.type !== "evidence") {
+      if (target.type !== "evidence") {
         store().logActivity(actorOf(ctx), "attach_evidence", `REFUSED - ${fieldId} is not an evidence field`);
         return {
           status: "refused",

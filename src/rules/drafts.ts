@@ -1,4 +1,4 @@
-import type { Patient, PayerRules } from "../data/seed";
+import { getDrug, type Patient, type PayerRules } from "../data/seed";
 import type { RiskAssessment, Conflict } from "./risk";
 
 /** A trial is only "tried and failed" when the record says it failed.
@@ -38,9 +38,31 @@ const describe = (m: Patient["medsTried"][number]) =>
 /** The therapy actually on the submission, not a hardcoded drug. */
 function requestedTherapy(rules: PayerRules | null, formFields: Record<string, unknown> = {}): string {
   const code = String(formFields["hcpcs_code"] ?? "").trim();
-  const drug = rules?.drug ?? "the requested therapy";
-  return code ? `${drug} (HCPCS ${code})` : drug;
+  // The drug is whatever the submission requests, resolved from the code.
+  //
+  // This used to take the NAME from rules.drug - a per-payer constant reading
+  // "Humira (adalimumab)" on every payer file - and the CODE from the form. A
+  // request for J1438 therefore produced a letter to the insurer that read
+  // "Humira (adalimumab) (HCPCS J1438)": two different molecules, with
+  // different dosing, different indications and different formulary handling,
+  // named as one drug in a document the clinician signs.
+  const drug = getDrug(code);
+  if (drug) return `${drug.name} (HCPCS ${drug.hcpcs})`;
+  if (code) return `the requested therapy (HCPCS ${code}, not recognised in the coverage file)`;
+  return rules?.drug ?? "the requested therapy";
 }
+
+/** The diagnosis being submitted, which is not always the chart's first one. */
+function submittedDiagnosis(patient: Patient, formFields: Record<string, unknown> = {}) {
+  const code = String(formFields["diagnosis_code"] ?? "").trim().toUpperCase();
+  if (!code) return patient.diagnoses[0];
+  const match = patient.diagnoses.find((d) => d.code.toUpperCase() === code);
+  // A code that is on the form but not in the chart is reported as what it is,
+  // rather than silently replaced by the chart's first diagnosis - which had
+  // the letter arguing necessity for a condition other than the one filed.
+  return match ?? { code, label: "not recorded in the chart under this code" };
+}
+
 
 const NEEDS_CLINICIAN = "[Clinician: complete this assessment before signing.]";
 
@@ -54,7 +76,7 @@ export function draftFor(
   formFields: Record<string, unknown> = {}
 ): string | null {
   if (!patient) return null;
-  const dx = patient.diagnoses[0];
+  const dx = submittedDiagnosis(patient, formFields);
   const { failed, ongoing, responded } = splitTrials(patient);
   const crp = patient.labs.find((l) => l.name === "CRP")?.value;
 
@@ -100,7 +122,7 @@ export function draftAppeal(
   formFields: Record<string, unknown> = {}
 ): string | null {
   if (!patient || !rules) return null;
-  const dx = patient.diagnoses[0];
+  const dx = submittedDiagnosis(patient, formFields);
   const { failed, ongoing, responded } = splitTrials(patient);
 
   const therapyLines: string[] = [];

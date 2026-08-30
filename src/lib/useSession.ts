@@ -38,7 +38,10 @@ export function useSession() {
       if (json?.status === "authenticated") {
         setState({ status: "authenticated", clinician: json.clinician, directory: [], error: null });
       } else {
-        setState({ status: "anonymous", clinician: null, directory: json?.clinicians ?? [], error: null });
+        // No directory: the session endpoint no longer hands the list of valid
+        // clinician ids to anonymous callers, because that is exactly the input
+        // the sign-in throttle exists to defend against.
+        setState({ status: "anonymous", clinician: null, directory: [], error: null });
       }
     } catch {
       setState({ status: "unavailable", clinician: null, directory: [], error: "The session service could not be reached." });

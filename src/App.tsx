@@ -16,6 +16,10 @@ import { useUnsavedGuard } from "./lib/useUnsavedGuard";
 function TopBar({ onCompare, onDemo, demoRunning }: { onCompare: () => void; onDemo: () => void; demoRunning: boolean }) {
   const toolCount = tools.length;
   const webmcp = useCoAuth((s) => s.webmcpConnected);
+  // How many a runtime actually took. Before a runtime attaches this is the
+  // full set, offered; after a partial registration it is what was accepted,
+  // which is the number worth showing rather than the number we hoped for.
+  const registered = useCoAuth((s) => s.webmcpRegistered);
   const payer = useCoAuth((s) => s.payerRules?.name);
   return (
     <header className="topbar">
@@ -31,7 +35,11 @@ function TopBar({ onCompare, onDemo, demoRunning }: { onCompare: () => void; onD
         </button>
         <button className="pill pill-compare" data-testid="open-compare" onClick={onCompare}>Compare vs baseline</button>
         <span className={`pill ${webmcp ? "pill-live" : "pill-idle"}`} data-testid="webmcp-status">
-          {webmcp ? `WebMCP connected · ${toolCount} tools` : `WebMCP ready · ${toolCount} tools`}
+          {webmcp
+            ? `WebMCP connected · ${registered ?? toolCount} tools`
+            : registered != null && registered < toolCount
+            ? `WebMCP partial · ${registered} of ${toolCount} tools`
+            : `WebMCP ready · ${toolCount} tools`}
         </span>
       </div>
     </header>

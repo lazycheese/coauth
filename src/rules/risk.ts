@@ -1,4 +1,4 @@
-import { getDrug, payerMemberPrefix, type Patient, type PayerRules } from "../data/seed";
+import { getDrug, payerMemberPrefix, docs, type Patient, type PayerRules } from "../data/seed";
 import { validate } from "./validate";
 import { BASE, COMPLETENESS, CONFLICT, BANDS, CLAMP } from "./weights";
 
@@ -148,10 +148,14 @@ const RULES: Rule[] = [
     if (!m) {
       return {
         id: "dose-unreadable",
-        severity: "high",
+        // Blocking. The weight note already argued this - "an unreadable dose is
+        // how a thousand-fold unit error reaches a payer unexamined" - while the
+        // severity waved it through. The reasoning was right; the severity was
+        // not.
+        severity: "critical",
         label: "Dose is not in a readable form",
         detail: `"${dose}" does not state a dose and a unit that can be checked against the label for ${drug.name}. Write it as a number and a unit, for example "40 mg every other week".`,
-        requiresHumanOverride: false,
+        requiresHumanOverride: true,
         points: CONFLICT["dose-unreadable"].points,
         weightRationale: CONFLICT["dose-unreadable"].because,
       };
@@ -165,8 +169,10 @@ const RULES: Rule[] = [
     // payer will argue about. "40 mcg" for a 40 mg drug is a thousand-fold
     // underdose, and a submission carrying one should not be signable at all
     // without the clinician saying, in writing, that they meant it.
-    if (mg > 0 && (mg * 10 < lo || mg > hi * 10)) {
-      const factor = mg * 10 < lo ? Math.round(lo / mg) : Math.round(mg / hi);
+    // 3x, not 10x. A tenfold band left everything from 1.1x to 10x - up to
+    // 1600 mg of adalimumab, forty pens - as a non-blocking advisory.
+    if (mg > 0 && (mg * 3 < lo || mg > hi * 3)) {
+      const factor = mg * 3 < lo ? Math.round(lo / mg) : Math.round(mg / hi);
       return {
         id: "dose-implausible",
         severity: "critical",
@@ -208,6 +214,28 @@ const RULES: Rule[] = [
       };
     }
     return null;
+  },
+
+  // Active serious infection with a biologic request.
+  //
+  // Every TNF inhibitor carries a boxed warning against starting therapy during
+  // an active infection. The chart records the fact, the MCP schema publishes
+  // it, and until now nothing read it: the field was modelled and never
+  // evaluated, which is worse than not modelling it, because the data was there
+  // to be checked and the check was absent.
+  ({ formFields, patient }) => {
+    const drug = getDrug(str(formFields["hcpcs_code"]));
+    if (!patient || !drug) return null;
+    if (!patient.clinical.activeInfection) return null;
+    return {
+      id: "active-infection",
+      severity: "critical",
+      label: "Active infection with a biologic request",
+      detail: `The chart records an active infection. ${drug.name} carries a boxed warning against initiation during an active serious infection. Treat the infection first, or record an override documenting why therapy should begin now.`,
+      requiresHumanOverride: true,
+      points: CONFLICT["active-infection"].points,
+      weightRationale: CONFLICT["active-infection"].because,
+    };
   },
 
   // Biologic with a positive TB screen on the chart.
@@ -284,9 +312,27 @@ const RULES: Rule[] = [
     const maxAge = rules.criteria.tbScreenMaxAgeMonths;
     if (!maxAge) return null;
 
+    // Date the evidence that was actually submitted, not only the chart lab.
+    // Attaching the screening document is the normal path, and keying off the
+    // chart alone meant that path skipped the window entirely.
+    const attachedId = str(formFields["tb_screen"]);
+    const attached = docs.find((d) => d.id === attachedId);
     const lab = patient.labs.find((l) => /TB|QuantiFERON/i.test(l.name));
-    if (!lab?.date) return null;
-    const when = Date.parse(lab.date);
+    const dated = attached?.date ?? lab?.date;
+    const source = attached?.date ? `the attached ${attached.label}` : "the screen on record";
+
+    if (!dated) {
+      return {
+        id: "tb-screen-undated",
+        severity: "critical",
+        label: "TB screening evidence carries no date",
+        detail: `${rules.name} requires TB screening within ${maxAge} months of starting a biologic, and nothing submitted here says when the screening was done. Attach a dated result, or record an override.`,
+        requiresHumanOverride: true,
+        points: CONFLICT["tb-screen-stale"].points,
+        weightRationale: CONFLICT["tb-screen-stale"].because,
+      };
+    }
+    const when = Date.parse(dated);
     if (Number.isNaN(when)) return null;
 
     const ageMonths = (Date.now() - when) / (1000 * 60 * 60 * 24 * 30.44);
@@ -295,10 +341,44 @@ const RULES: Rule[] = [
       id: "tb-screen-stale",
       severity: "critical",
       label: "TB screening is older than the payer allows",
-      detail: `${rules.name} requires TB screening within ${maxAge} months of starting a biologic. The screen on record is dated ${lab.date}, about ${Math.round(ageMonths)} months ago. Repeat the screening, or record an override documenting why the existing result still stands.`,
+      detail: `${rules.name} requires TB screening within ${maxAge} months of starting a biologic. ${source} is dated ${dated}, about ${Math.round(ageMonths)} months ago. Repeat the screening, or record an override documenting why the existing result still stands.`,
       requiresHumanOverride: true,
       points: CONFLICT["tb-screen-stale"].points,
       weightRationale: CONFLICT["tb-screen-stale"].because,
+    };
+  },
+
+  // Dosing frequency, which nothing looked at.
+  //
+  // Adalimumab errors in practice are overwhelmingly frequency errors - weekly
+  // where the label says every other week - and the amount can be perfectly
+  // correct while the schedule doubles the exposure. Reading only the first
+  // number and unit meant "160 mg every week", an induction dose given
+  // chronically, passed without comment.
+  ({ formFields }) => {
+    const drug = getDrug(str(formFields["hcpcs_code"]));
+    const dose = str(formFields["dose"]);
+    if (!drug || !dose) return null;
+    const lower = dose.toLowerCase();
+    // "every other week" must not read as "every week", so the alternate
+    // schedule is excluded before the weekly one is looked for.
+    const alternate = /every\s+other\s+week|eow|q2w|biweekly|fortnight/.test(lower);
+    const weekly = !alternate && /(every\s+week|weekly|once\s+a\s+week|q1w|qw)/.test(lower);
+    if (!weekly) return null;
+    const m = lower.match(/(\d+(?:\.\d+)?)\s*(?:mg|milligrams?)/);
+    const mg = m ? Number(m[1]) : null;
+    // Weekly adalimumab is labelled for some indications, so a weekly schedule
+    // is a question rather than an error - except at an induction amount, which
+    // is given once and is not a schedule anyone intends to repeat.
+    if (drug.hcpcs !== "J0135" || mg === null || mg < 80) return null;
+    return {
+      id: "dose-frequency",
+      severity: "critical",
+      label: "Induction dose written as an ongoing weekly schedule",
+      detail: `"${dose}" gives ${mg} mg every week. For ${drug.name}, ${mg} mg is an induction dose given once, not a maintenance schedule (${drug.doseNote}). Confirm the intended frequency, or record an override.`,
+      requiresHumanOverride: true,
+      points: CONFLICT["dose-frequency"].points,
+      weightRationale: CONFLICT["dose-frequency"].because,
     };
   },
 

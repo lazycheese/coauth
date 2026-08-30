@@ -299,10 +299,9 @@ function originAllowed(req: Request): boolean {
 
 export default async function handler(req: Request): Promise<Response> {
   if (!originAllowed(req)) {
-    return new Response(JSON.stringify({ error: "origin not allowed" }), {
-      status: 403,
-      headers: { "content-type": "application/json" },
-    });
+    // JSON-RPC shaped, like every other error this server returns. These last
+    // two were the exceptions, which made the comment saying so untrue.
+    return rpcError(null, -32600, "Origin not allowed.", LATEST, 403);
   }
 
   // The client MUST send a supported MCP-Protocol-Version on requests after
@@ -333,9 +332,12 @@ export default async function handler(req: Request): Promise<Response> {
   // pass, because the check only ran when the header was present.
   const accept = req.headers.get("accept") ?? "";
   if (!accept.includes("application/json") && !accept.includes("*/*")) {
-    return new Response(
-      JSON.stringify({ error: { code: "not_acceptable", message: "This endpoint returns application/json." } }),
-      { status: 406, headers: { "content-type": "application/json" } }
+    return rpcError(
+      null,
+      -32600,
+      "This endpoint returns application/json; the request did not accept it.",
+      version,
+      406
     );
   }
 

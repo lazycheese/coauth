@@ -71,14 +71,22 @@ curl -X POST https://coauth.vercel.app/api/v1/submit   -H "content-type: applica
     <h2>Sandbox</h2>
     <p>Every endpoint above is a live, no-cost sandbox: it serves fictional demo
       data only, so you can call it freely without side effects. There is nothing
-      to reset and no rate-limited quota to exhaust. Copy any command into your
-      terminal to try it now.</p>
+      to reset, and the read endpoints have no quota to exhaust. Copy any command
+      into your terminal to try it now.</p>
 
     <h2>Authentication and limits</h2>
-    <p>None. All endpoints are public and read-only. There are no API keys and no
-      OAuth. There is also no rate limiting: this deployment has no shared store
-      to count requests in, so rather than advertise a limit it cannot enforce,
-      it advertises none. Please be considerate with automated traffic.</p>
+    <p>The read endpoints listed above are public: no API keys, no OAuth, no
+      quota. Please be considerate with automated traffic.</p>
+    <p>The two endpoints that are not read-only work differently.
+      <code>/api/v1/sign</code> mints a clinician approval and needs an
+      authenticated clinician session <em>and</em> that clinician's credential
+      supplied with the request; a session on its own is not enough, because any
+      script running in the page carries one.
+      <code>/api/v1/submit</code> accepts a submission only with an approval
+      minted for that exact payer, chart, form and set of clinical overrides.
+      Both <code>/api/v1/login</code> and <code>/api/v1/sign</code> are rate
+      limited per caller and globally; exceeding it returns
+      <code>429</code> with a <code>Retry-After</code> header.</p>
 
     <h2>Errors</h2>
     <p>Errors are returned as JSON with a stable shape:

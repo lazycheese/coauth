@@ -8,9 +8,12 @@ rendered page, while the clinician keeps the judgment calls and the signature.
 
 Built for the **OpenAI WebMCP Challenge**.
 
-> About **82% of denied prior authorizations are overturned on appeal**: the
-> clinical decision is usually fine, the paperwork is not. CoAuth works on the
-> paperwork and leaves the decision with the clinician.
+> In Medicare Advantage in 2024, **80.7% of appealed prior-authorization denials
+> were fully or partially overturned - but only 11.5% of denials were appealed
+> at all** ([KFF, 2026](https://www.kff.org/medicare/medicare-advantage-insurers-made-nearly-53-million-prior-authorization-determinations-in-2024/)).
+> Most denials that get contested turn out to have been wrong, and most are
+> never contested. That is a paperwork problem, not a clinical one. CoAuth works
+> on the paperwork and leaves the clinical decision with the clinician.
 
 ## Why it matters
 
@@ -185,6 +188,13 @@ what that does and does not mean.
   server-established identity. What it does not establish is that the identity
   belongs to the person using it. Real use needs an identity provider and
   per-clinician credentials.
+- **A hostile script in the page can still watch a signature happen.** Signing
+  requires the clinician's credential at the moment of signing, so a session
+  cookie alone is not enough and page JavaScript cannot mint approvals silently.
+  But a script that can read the field can read the credential as it is typed.
+  The step-up moves the attack from "mint at will, invisibly" to "wait for a
+  human and race them"; it does not make an attacker with arbitrary JavaScript
+  in the page harmless, and nothing at this layer would.
 - **The clinician-judgment control is page-side, and the server cannot check
   it.** `fill_field` and `attach_evidence` refuse those fields, and the review
   panel refuses to sign over agent-written or script-written values. All of that
@@ -192,17 +202,25 @@ what that does and does not mean.
   cannot see who typed it. So a caller holding a valid session can sign a
   submission whose judgment text an agent wrote. The provenance rules are what
   keep an agent driving the page from doing it, not a server-side guarantee.
-- **Replay protection is best-effort here.** Approvals are single-use, and the
-  claim is atomic when a KV store is configured. This deployment has none, so it
-  falls back to per-instance memory and the API says so in its response rather
-  than implying a guarantee it cannot make.
+- **Replay protection is durable on this deployment.** Approvals are single-use,
+  and the claim is an atomic `SET NX` against a Redis store, so concurrent
+  replays of one approval cannot both win. Where no store is configured the
+  claim falls back to per-instance memory, and the API reports
+  `replayProtection: "best-effort"` in that case rather than implying a
+  guarantee it cannot make. `npm run verify` replays one approval twelve times
+  concurrently and requires exactly one to be accepted.
 - **Injection detection is best-effort.** Record text that reads as an
   instruction is flagged, but any pattern matcher can be evaded. The protection
   that matters is structural: judgment fields cannot be filled by a tool and
   submission requires the server-verified signature.
-- **No rate limiting**, for the same reason as replay: nothing to count in.
-- **The API is public and unauthenticated**, which is fine for fictional data
-  and would not be for anything else.
+- **Sign-in and signing are rate limited**, per caller and globally, counted in
+  the same Redis store. The caller is identified from the platform's own
+  forwarding header rather than the client-supplied one, so rotating a header
+  does not mint a fresh budget. Everything else is unlimited.
+- **The read endpoints are public and unauthenticated**, which is fine for
+  fictional data and would not be for anything else. The endpoints that mint or
+  accept an approval are not: they need a clinician session, and signing needs
+  the clinician's credential again.
 
 ## Stack
 

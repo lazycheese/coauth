@@ -82,6 +82,16 @@ export const CONFLICT: Record<string, Weighted> = {
     because:
       "A dose the payer cannot match to the label invites a denial or a downward adjustment, but is frequently resolved by a pharmacist rather than refused.",
   },
+  "dose-frequency": {
+    points: 28,
+    because:
+      "A schedule error changes total exposure as surely as an amount error, and is the more common mistake in practice: the number on the page looks right, so nothing draws the eye to it. Blocking rather than advisory, because the difference between a one-off induction dose and a weekly one is not something to infer from a form.",
+  },
+  "active-infection": {
+    points: 40,
+    because:
+      "A boxed-warning contraindication, weighted with the positive TB screen. Starting a TNF inhibitor during an active serious infection is the failure mode the warning exists for, and the chart already records the fact, so there is no reason for this to be anything but blocking.",
+  },
   "dose-implausible": {
     points: 30,
     because:

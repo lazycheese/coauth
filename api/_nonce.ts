@@ -74,11 +74,22 @@ export async function claimOnce(jti: string, confirmationId: string, ttlMs: numb
     if (body?.result === "OK") return { fresh: true, protection: "durable" };
 
     // result null means the key already existed: this approval has been used.
-    const prior = await fetch(`${url}/get/${encodeURIComponent(key)}`, {
-      headers: { Authorization: `Bearer ${token}` },
-    });
-    const priorBody = await prior.json();
-    return { fresh: false, existing: priorBody?.result ?? undefined, protection: "durable" };
+    //
+    // That verdict is already final. The GET below only fetches the earlier
+    // confirmation id to show the caller, and a failure of it must not reach
+    // the catch below - falling back to per-instance memory there would turn a
+    // known replay into an accepted duplicate because a cosmetic lookup blipped.
+    let existing: string | undefined;
+    try {
+      const prior = await fetch(`${url}/get/${encodeURIComponent(key)}`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const priorBody = await prior.json();
+      existing = priorBody?.result ?? undefined;
+    } catch {
+      /* the id is a nicety; the refusal is not */
+    }
+    return { fresh: false, existing, protection: "durable" };
   } catch {
     // The store is configured but unreachable.
     //

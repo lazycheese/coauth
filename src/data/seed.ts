@@ -48,6 +48,12 @@ export interface EvidenceDoc {
   id: string;
   label: string;
   kind: string;
+  /** When the document was produced.
+   *
+   * Attaching a document is the normal way to satisfy the TB screening
+   * requirement, and an undated document cannot be checked for recency - so the
+   * recency rule simply never ran on the path most submissions take. */
+  date?: string;
   /** Transcribed body of the document, when the record carries one. */
   content?: string;
 }
@@ -110,9 +116,14 @@ export const drugs: Record<string, DrugSpec> = {
     // M08 (juvenile idiopathic arthritis) belongs here: adalimumab is approved
     // for polyarticular JIA, and omitting it reported a labelled indication as
     // a critical mismatch. L40 covers plaque psoriasis as well as L40.5.
-    indications: ["M05", "M06", "M08", "L40", "K50", "K51", "M45", "L73.2"],
+    // H20/H30/H44 are non-infectious uveitis and M46.8 is non-radiographic
+    // axial spondyloarthritis: both FDA-labelled, both previously absent, so a
+    // correct on-label request raised a critical, signature-blocking mismatch.
+    // Blocking legitimate care is a safety failure too, and the one prior
+    // authorization is already notorious for.
+    indications: ["M05", "M06", "M08", "L40", "K50", "K51", "M45", "M46.8", "L73.2", "H20", "H30", "H44"],
     indicationLabel:
-      "rheumatoid arthritis, juvenile idiopathic arthritis, psoriatic arthritis, plaque psoriasis, ankylosing spondylitis, hidradenitis suppurativa, or inflammatory bowel disease",
+      "rheumatoid arthritis, juvenile idiopathic arthritis, psoriatic arthritis, plaque psoriasis, ankylosing spondylitis, non-radiographic axial spondyloarthritis, non-infectious uveitis, hidradenitis suppurativa, or inflammatory bowel disease",
     // 10 mg is the smallest pediatric dose; 160 mg is the Crohn's, ulcerative
     // colitis and hidradenitis suppurativa induction dose at week 0.
     doseMgRange: [10, 160],
@@ -131,6 +142,28 @@ export const drugs: Record<string, DrugSpec> = {
   },
 };
 
+/** Every field definition any payer can ask for, keyed by id.
+ *
+ * The judgment gate must not depend on which payer happens to be loaded. It
+ * used to read `payerRules`, so an agent that simply had not called
+ * check_payer_rules first found `payerRules` null, the lookup undefined, and
+ * the refusal skipped - it could then write the attending attestation, and the
+ * page reported zero clinician work outstanding. Whether a field belongs to the
+ * clinician is a fact about the field, not about the app's current state. */
+export const fieldCatalogue: Record<string, FieldDef> = {};
+
+/** True when this field id is one only a clinician may resolve. Unknown ids are
+ *  treated as judgment fields: refusing something we cannot classify is the
+ *  safe direction. */
+export function isJudgmentField(fieldId: string): boolean {
+  const f = fieldCatalogue[fieldId];
+  return f ? !!f.requiresHumanJudgment : true;
+}
+
+export function knownField(fieldId: string): FieldDef | undefined {
+  return fieldCatalogue[fieldId];
+}
+
 export function getDrug(hcpcs: string | undefined): DrugSpec | undefined {
   return hcpcs ? drugs[hcpcs.trim().toUpperCase()] : undefined;
 }
@@ -143,6 +176,30 @@ export const payerMemberPrefix: Record<string, string> = {
 };
 
 export const patients: Record<string, Patient> = {
+  // A chart that exercises the screening rules rather than passing them.
+  //
+  // Every other seeded chart has a TB screen about a month old, so the recency
+  // window could never fire and the rule shipped with no data that reached it.
+  // This one is three years stale and carries an active infection, which is a
+  // boxed-warning contraindication to every TNF inhibitor.
+  "priya-raman": {
+    id: "priya-raman",
+    name: "Priya Raman",
+    dob: "1986-11-03",
+    memberId: "UHC-41277",
+    diagnoses: [{ code: "M06.9", label: "Rheumatoid arthritis, unspecified" }],
+    medsTried: [
+      { name: "Methotrexate", klass: "csDMARD", durationMonths: 7, outcome: "Inadequate response", result: "failed" },
+      { name: "Hydroxychloroquine", klass: "csDMARD", durationMonths: 5, outcome: "Inadequate response", result: "failed" },
+    ],
+    labs: [
+      { name: "CRP", value: "31 mg/L", date: "2026-08-18", flag: "abnormal" },
+      { name: "WBC", value: "14.2 x10^9/L", date: "2026-08-18", flag: "abnormal" },
+      { name: "TB (QuantiFERON)", value: "Negative", date: "2023-02-14", flag: "normal" },
+    ],
+    clinical: { tbScreen: "negative", activeInfection: true, priorBiologics: 0 },
+  },
+
   "jane-doe": {
     id: "jane-doe",
     name: "Jane Doe",
@@ -198,11 +255,11 @@ export const patients: Record<string, Patient> = {
 };
 
 export const docs: EvidenceDoc[] = [
-  { id: "doc-cbc", label: "CBC panel (2026-08-10)", kind: "lab" },
-  { id: "doc-tb", label: "TB screening (QuantiFERON)", kind: "lab" },
-  { id: "doc-notes", label: "Rheumatology consult note", kind: "note" },
-  { id: "doc-mtx", label: "Methotrexate trial summary", kind: "note" },
-  { id: "doc-imaging", label: "Hand X-ray report", kind: "imaging" },
+  { id: "doc-cbc", label: "CBC panel (2026-08-10)", kind: "lab", date: "2026-08-10" },
+  { id: "doc-tb", label: "TB screening (QuantiFERON)", kind: "lab", date: "2026-08-01" },
+  { id: "doc-notes", label: "Rheumatology consult note", kind: "note", date: "2026-08-06" },
+  { id: "doc-mtx", label: "Methotrexate trial summary", kind: "note", date: "2026-07-22" },
+  { id: "doc-imaging", label: "Hand X-ray report", kind: "imaging", date: "2026-06-30" },
 ];
 
 const baseFields: FieldDef[] = [
@@ -272,6 +329,13 @@ export const payers: Record<string, PayerRules> = {
     ],
   },
 };
+
+// Populated from every payer file, so the catalogue cannot drift from what the
+// payers actually ask for.
+for (const payer of Object.values(payers)) {
+  for (const f of payer.requiredFields) fieldCatalogue[f.id] = f;
+}
+
 
 /** Resolve a field's `source` expression to the actual scalar value in the record,
  * so provenance can be *verified* (value matches chart) rather than just asserted.

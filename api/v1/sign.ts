@@ -1,5 +1,6 @@
 import { signingSecret, digestOf, mint, newJti, type ApprovalPayload } from "../_sign";
-import { readSession, sameOrigin } from "../_session";
+import { readSession, sameOrigin, clinicianPassphrase, constantTimeEqual } from "../_session";
+import { rateLimitSign } from "../_ratelimit";
 import { clinicalRefusal } from "../_clinical";
 
 export const config = { runtime: "edge" };
@@ -12,14 +13,29 @@ function err(status: number, code: string, message: string, hint: string, detail
 
 /** Mint a clinician approval token over the exact submission being attested to.
  *
- * Three things must hold, and each is checked here rather than in the page:
+ * Four things must hold, and each is checked here rather than in the page:
  *   - the caller holds an authenticated clinician session;
+ *   - the caller can produce the clinician's credential again, now;
  *   - the submission passes the same clinical rules the page runs;
  *   - the identity recorded in the token comes from the session.
  *
- * The last one matters most. The signer used to be a string in the request
- * body, which made the audit trail self-asserted: a caller could name anyone.
- * It is now whoever authenticated, and nothing the caller sends can change it. */
+ * The second one is here because the first is not enough on its own. A session
+ * lives in a cookie, and a cookie is attached to every same-origin request the
+ * page makes - including one made by a script. So while a clinician was signed
+ * in, any JavaScript running in the tab could call this endpoint directly and
+ * mint a valid, correctly-attributed approval under their NPI, without a click
+ * and without touching the form. Guarding the button was no defence, because
+ * nothing made the button the only route.
+ *
+ * Requiring the credential per signature makes the session insufficient: a
+ * signature needs something the clinician knows and supplies at the moment of
+ * signing, which a script sitting in the page does not have.
+ *
+ * This does not make a hostile script in the page harmless - one that can watch
+ * the field can watch the credential being typed. It moves the attack from
+ * "mint silently, at will" to "wait for a human to sign and race them", which
+ * is a materially different thing and the same trade-off any step-up
+ * re-authentication makes. */
 export default async function handler(req: Request): Promise<Response> {
   if (req.method !== "POST") {
     return err(405, "method_not_allowed", "Use POST.", "POST { payer, patientId, formFields, attestation }.");
@@ -50,6 +66,17 @@ export default async function handler(req: Request): Promise<Response> {
     );
   }
 
+  // Throttled like the credential endpoint, because this now takes a credential.
+  const limit = await rateLimitSign(req);
+  if (!limit.allowed) {
+    return err(
+      429,
+      "too_many_attempts",
+      "Too many signing attempts. Try again shortly.",
+      `Wait ${limit.retryAfter} second(s) before trying again.`
+    );
+  }
+
   let body: any;
   try {
     body = await req.json();
@@ -62,6 +89,18 @@ export default async function handler(req: Request): Promise<Response> {
   const attestation = String(body?.attestation ?? "");
   const formFields = (body?.formFields ?? {}) as Record<string, unknown>;
   const overrides = (body?.overrides ?? {}) as Record<string, string>;
+
+  // Step-up: the session says who is here, the credential says they are the one
+  // asking for this signature.
+  const expected = clinicianPassphrase();
+  if (!expected || !constantTimeEqual(String(body?.passphrase ?? ""), expected)) {
+    return err(
+      403,
+      "reauthentication_required",
+      "Signing requires the clinician's credential, not just an active session.",
+      "The clinician re-enters their passphrase to sign. A session cookie alone is not enough, because any script in the page carries it."
+    );
+  }
 
   if (!payer || !patientId || !attestation) {
     return err(

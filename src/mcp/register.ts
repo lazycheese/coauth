@@ -10,11 +10,51 @@ export function findTool(name: string): ToolDef | undefined {
 
 /** Invoke a tool by name. A missing tool is a programming error, so it fails
  * loudly here instead of crashing a render through a non-null assertion. */
+/** Check an argument object against a tool's declared inputSchema.
+ *
+ * A page-side runtime is not obliged to validate anything, so a schema only the
+ * runtime enforces is enforced at somebody else's discretion. Covers the
+ * constructs these schemas actually use rather than pretending to be a general
+ * JSON Schema validator. */
+function violatesSchema(schema: unknown, args: unknown): string | null {
+  const spec = schema as { required?: string[]; properties?: Record<string, { type?: string; enum?: unknown[] }> } | undefined;
+  if (!spec) return null;
+  const required = spec.required ?? [];
+  if (args === undefined || args === null) {
+    return required.length ? `missing required argument(s): ${required.join(", ")}` : null;
+  }
+  if (typeof args !== "object" || Array.isArray(args)) return "arguments must be an object";
+  const a = args as Record<string, unknown>;
+  for (const key of required) {
+    if (a[key] === undefined || a[key] === null) return `missing required argument "${key}"`;
+  }
+  for (const [key, propSpec] of Object.entries(spec.properties ?? {})) {
+    const value = a[key];
+    if (value === undefined) continue;
+    if (propSpec.type === "string" && typeof value !== "string") return `"${key}" must be a string`;
+    if (Array.isArray(propSpec.enum) && !propSpec.enum.includes(value)) {
+      return `"${key}" must be one of: ${propSpec.enum.join(", ")}`;
+    }
+  }
+  return null;
+}
+
 export async function invokeTool(name: string, input: unknown = {}, ctx?: ToolCtx): Promise<ToolResult> {
   const tool = findTool(name);
   if (!tool) {
     const known = tools.map((t) => t.name).join(", ");
     throw new Error(`Unknown tool "${name}". Registered tools: ${known}`);
+  }
+  // Enforced here as well as in the schema, so a runtime that passes arguments
+  // through unchecked cannot hand a tool something its contract excludes.
+  const violation = violatesSchema(tool.inputSchema, input);
+  if (violation) {
+    useCoAuth.getState().logActivity(ctx?.actor ?? "agent", name, `REFUSED - ${violation}`);
+    return {
+      status: "refused",
+      isError: true,
+      summary: `Cannot call ${name}: ${violation}.`,
+    } as ToolResult;
   }
   return tool.execute(input, ctx);
 }
@@ -146,7 +186,11 @@ export async function registerTools() {
   if (failures.length) {
     useCoAuth.getState().setToast(`WebMCP registration incomplete: ${failures.length} tool(s) rejected.`);
   }
-  useCoAuth.getState().setWebmcpConnected(fullyRegistered);
+  // Report the count a runtime actually accepted, so a partial registration is
+  // not displayed as the full set. Per surface, since a second surface
+  // registering the same tools is not thirteen more tools.
+  const acceptedHere = fresh.length ? Math.round(registered / fresh.length) : null;
+  useCoAuth.getState().setWebmcpConnected(fullyRegistered, acceptedHere ?? undefined);
   return fullyRegistered;
 }
 

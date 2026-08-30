@@ -74,8 +74,25 @@ export function clinicalRefusal(
 
   // Critical clinical conflicts. An override is a documented clinical decision,
   // so a conflict carrying one is allowed through; one without is not.
+  // An override has to say something. The interface asks for at least eight
+  // characters; the server accepted any truthy value, so two characters bought
+  // a documented clinical override of a thousand-fold dosing error. The floor
+  // belongs here, where it cannot be skipped by not using the interface.
+  const MIN_RATIONALE = 8;
+  const documented = (id: string) => (overrides?.[id] ?? "").trim().length >= MIN_RATIONALE;
+
   const conflicts = detectConflicts(formFields, patient, rules, overrides ?? {});
-  const blocking = conflicts.filter((c) => c.severity === "critical" && !overrides?.[c.id]);
+  const thin = conflicts.filter((c) => c.severity === "critical" && overrides?.[c.id] && !documented(c.id));
+  if (thin.length) {
+    return {
+      code: "override_not_documented",
+      message: `${thin.length} clinical override(s) carry no usable rationale.`,
+      hint: `An override records why a contraindication was accepted. Give at least ${MIN_RATIONALE} characters of clinical reasoning.`,
+      detail: thin.map((c) => ({ id: c.id, label: c.label })),
+    };
+  }
+
+  const blocking = conflicts.filter((c) => c.severity === "critical" && !documented(c.id));
   if (blocking.length) {
     return {
       code: "critical_conflict",

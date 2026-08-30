@@ -123,6 +123,8 @@ interface CoAuthState {
   scriptedRun: "walkthrough" | "comparison" | null;
   toast: string | null;
   webmcpConnected: boolean;
+  /** Tools a runtime accepted, or null before one has answered. */
+  webmcpRegistered: number | null;
 
   setPatient: (p: Patient) => void;
   setPayerRules: (r: PayerRules) => void;
@@ -137,11 +139,12 @@ interface CoAuthState {
   setAppealDraft: (text: string | null) => void;
   recordSubmission: (pa: SubmittedPA) => void;
   setToast: (msg: string | null) => void;
-  setWebmcpConnected: (v: boolean) => void;
+  setWebmcpConnected: (v: boolean, registered?: number) => void;
   setScriptedRun: (r: CoAuthState["scriptedRun"]) => void;
   addFlag: (fieldId: string, reason: string) => void;
-  /** Mints a server-verified approval, or null with a toast explaining why not. */
-  sign: (attestation: string) => Promise<ApprovalToken | null>;
+  /** Mints a server-verified approval, or null with a toast explaining why not.
+   *  The passphrase is required per signature and is never stored. */
+  sign: (attestation: string, passphrase: string) => Promise<ApprovalToken | null>;
   clearApproval: () => void;
   logActivity: (actor: "agent" | "human", tool: string, summary: string) => void;
   setFocused: (fieldId: string | null) => void;
@@ -214,9 +217,11 @@ export const useCoAuth = create<CoAuthState>((set, get) => ({
   scriptedRun: null,
   toast: null,
   webmcpConnected: false,
+  webmcpRegistered: null,
 
   setToast: (msg) => set({ toast: msg }),
-  setWebmcpConnected: (v) => set({ webmcpConnected: v }),
+  setWebmcpConnected: (v, registered) =>
+    set(registered === undefined ? { webmcpConnected: v } : { webmcpConnected: v, webmcpRegistered: registered }),
   setScriptedRun: (r) => set({ scriptedRun: r }),
 
   setPatient: (p) => set({ patient: p }),
@@ -286,7 +291,7 @@ export const useCoAuth = create<CoAuthState>((set, get) => ({
       flags: [...s.flags.filter((f) => f.fieldId !== fieldId), { fieldId, reason }],
     })),
 
-  sign: async (attestation) => {
+  sign: async (attestation, passphrase) => {
     const s0 = get();
     // Covers the overrides as well as the fields. Recording an override runs
     // invalidateApproval, but it leaves formFields untouched - so a guard that
@@ -307,12 +312,17 @@ export const useCoAuth = create<CoAuthState>((set, get) => ({
         formFields: s0.formFields,
         overrides: s0.overrides,
         attestation,
+        // Sent, never kept. It is not in the store, not in the token, and not
+        // in the audit trail.
+        passphrase,
       });
       if (!res.ok || !res.json?.token) {
         const code = res.json?.error?.code;
         get().setToast(
           code === "authentication_required"
             ? "Sign in as a clinician before signing. An approval is minted for an authenticated clinician and for nobody else."
+            : code === "reauthentication_required"
+            ? "That passphrase was not accepted. Signing asks for it again each time, because a session alone is something a script in this page also has."
             : res.json?.error?.message ?? "The signing service did not issue an approval, so nothing was signed."
         );
         return null;

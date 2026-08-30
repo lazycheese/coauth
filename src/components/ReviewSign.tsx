@@ -17,6 +17,10 @@ export function ReviewSign() {
   const [clinicianId, setClinicianId] = useState("");
   const [passphrase, setPassphrase] = useState("");
   const [authError, setAuthError] = useState<string | null>(null);
+  // Asked for again at the moment of signing, and never held anywhere else. A
+  // session cookie travels with every request the page makes, including one a
+  // script makes, so a session alone cannot be what authorises a signature.
+  const [signingPassphrase, setSigningPassphrase] = useState("");
   const [authBusy, setAuthBusy] = useState(false);
   const [signing, setSigning] = useState(false);
   const [submitting, setSubmitting] = useState(false);
@@ -54,6 +58,7 @@ export function ReviewSign() {
     agentWritten.length === 0 &&
     unresolvedCritical.length === 0 &&
     attested &&
+    signingPassphrase.length > 0 &&
     !approvalToken &&
     !signing;
 
@@ -78,7 +83,9 @@ export function ReviewSign() {
     }
     setSigning(true);
     try {
-      const token = await sign("I attest this prior authorization is clinically accurate.");
+      const token = await sign("I attest this prior authorization is clinically accurate.", signingPassphrase);
+      // Cleared either way: it is not kept across an attempt.
+      setSigningPassphrase("");
       if (token) logActivity("human", "sign", `Signed by ${token.signer} (NPI ${token.npi}), server-verified`);
     } finally {
       setSigning(false);
@@ -173,15 +180,15 @@ export function ReviewSign() {
                 this page: printing them here would hand them to any agent reading the form.
               </p>
               <label>
-                <span>Clinician</span>
-                <select data-testid="signin-clinician" value={clinicianId} onChange={(e) => setClinicianId(e.target.value)}>
-                  <option value="">Select</option>
-                  {session.directory.map((c) => (
-                    <option key={c.id} value={c.id}>
-                      {c.name} ({c.role})
-                    </option>
-                  ))}
-                </select>
+                <span>Clinician ID</span>
+                <input
+                  type="text"
+                  data-testid="signin-clinician"
+                  autoComplete="username"
+                  placeholder="e.g. a-alvarez"
+                  value={clinicianId}
+                  onChange={(e) => setClinicianId(e.target.value)}
+                />
               </label>
               <label>
                 <span>Passphrase</span>
@@ -220,6 +227,23 @@ export function ReviewSign() {
             />
             <span>I attest this prior authorization is clinically accurate.</span>
           </label>
+          {authed && (
+            <label className="signer-field">
+              <span>Confirm your passphrase to sign</span>
+              <input
+                type="password"
+                data-testid="sign-passphrase"
+                autoComplete="current-password"
+                value={signingPassphrase}
+                disabled={!authed || missing > 0 || judgmentPending.length > 0 || agentWritten.length > 0 || unresolvedCritical.length > 0}
+                onChange={(e) => setSigningPassphrase(e.target.value)}
+              />
+              <small className="muted">
+                Asked for every signature. Being signed in is not enough on its own, because a script running in
+                this page carries the same session.
+              </small>
+            </label>
+          )}
           <button className="btn btn-primary" data-testid="approve-sign" disabled={!canSign} onClick={onSign}>
             {signing ? "Signing" : "Approve & Sign"}
           </button>

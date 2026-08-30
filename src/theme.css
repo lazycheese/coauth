@@ -337,6 +337,7 @@ body {
 .signer-field span { font-size: 11px; text-transform: uppercase; letter-spacing: .03em; color: var(--muted); }
 .signer-field input { font: inherit; font-size: 13px; padding: 7px 9px; border: 1px solid var(--line); border-radius: 6px; background: #fbfdff; }
 .signer-field input:disabled { background: #f2f4f7; cursor: not-allowed; }
+.signer-field small { font-size: 11px; line-height: 1.4; text-transform: none; letter-spacing: 0; }
 .audit-verify { font-size: 10px; text-transform: uppercase; letter-spacing: .03em; font-weight: 700; }
 .verify-server { color: #1c7a37; }
 .verify-client-only { color: #b7791f; }

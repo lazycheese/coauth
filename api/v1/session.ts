@@ -21,10 +21,11 @@ export default async function handler(req: Request): Promise<Response> {
 
   const session = await readSession(req);
   if (!session) {
-    return Response.json(
-      { status: "anonymous", clinicians: Object.values(CLINICIANS).map((c) => ({ id: c.id, name: c.name, role: c.role })) },
-      { status: 200, headers: H }
-    );
+    // Deliberately no directory. Handing the full list of valid clinician ids
+    // to anonymous callers supplied exactly the input the login throttle exists
+    // to defend against - the two controls were working against each other.
+    // The sign-in control asks for the id, the way a sign-in normally does.
+    return Response.json({ status: "anonymous" }, { status: 200, headers: H });
   }
   return Response.json(
     {

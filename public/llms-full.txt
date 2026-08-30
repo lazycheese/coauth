@@ -8,7 +8,9 @@ tools; the clinician owns clinical judgment and the legally required signature.
 
 ## The problem
 
-Up to 82% of denied prior authorizations are overturned on appeal - they were
+In Medicare Advantage in 2024, 80.7% of appealed prior-authorization denials
+were fully or partially overturned, while only 11.5% of denials were appealed at
+all (KFF, 2026: https://www.kff.org/medicare/medicare-advantage-insurers-made-nearly-53-million-prior-authorization-determinations-in-2024/). Contested denials were usually
 never clinically wrong, just mis-filed (incomplete submissions, format errors,
 unclear payer requirements). Browser agents that scrape the DOM make this worse,
 and this domain legally requires a human in the loop. CoAuth turns the payer form

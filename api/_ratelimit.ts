@@ -56,9 +56,17 @@ async function kvHit(key: string, limit: number, windowMs: number): Promise<Rate
     const count = Number(incr?.result ?? 0);
     if (count === 1) {
       // First hit in this window: give the counter the window's lifetime.
-      await fetch(`${url}/expire/${encodeURIComponent(key)}/${seconds}`, {
+      const exp = await fetch(`${url}/expire/${encodeURIComponent(key)}/${seconds}`, {
         headers: { Authorization: `Bearer ${token}` },
       });
+      // A counter with no TTL would live in the store forever. Window-stamped
+      // keys make that harmless for correctness but not for the key count, so
+      // a failed EXPIRE is retried once rather than ignored.
+      if (!exp.ok) {
+        await fetch(`${url}/expire/${encodeURIComponent(key)}/${seconds}`, {
+          headers: { Authorization: `Bearer ${token}` },
+        }).catch(() => {});
+      }
     }
     if (count > limit) return { allowed: false, retryAfter: seconds };
     return { allowed: true, retryAfter: 0 };
@@ -84,7 +92,7 @@ export function callerKey(req: Request): string {
   const platform = req.headers.get("x-vercel-forwarded-for") ?? req.headers.get("x-real-ip");
   if (platform) return platform.trim();
   const chain = (req.headers.get("x-forwarded-for") ?? "").split(",").map((s) => s.trim()).filter(Boolean);
-  return chain.length ? chain[chain.length - 1] : "unknown";
+  return chain.length ? chain[chain.length - 1] : "unidentified";
 }
 
 // Four per minute sustained, over a short window so an honest caller who does
@@ -94,11 +102,32 @@ export function callerKey(req: Request): string {
 const WINDOW_MS = 5 * 60 * 1000;
 const PER_CALLER = 20;
 const GLOBAL = 300;
+// Signing is a legitimate, repeated clinical action, not a credential guess.
+// This exists to bound a guessing attack against the step-up credential, not to
+// ration real work.
+const SIGN_PER_CALLER = 200;
 
 /** Check and consume a login attempt. */
 export async function rateLimitLogin(req: Request): Promise<RateVerdict> {
   const window = Math.floor(Date.now() / WINDOW_MS);
-  const caller = await kvHit(`coauth:login:${callerKey(req)}:${window}`, PER_CALLER, WINDOW_MS);
+  // "ip:" namespaces the caller so no forwarded value can collide with the
+  // global counter by being literally "all".
+  const caller = await kvHit(`coauth:login:ip:${callerKey(req)}:${window}`, PER_CALLER, WINDOW_MS);
   if (!caller.allowed) return caller;
-  return kvHit(`coauth:login:all:${window}`, GLOBAL, WINDOW_MS);
+  return kvHit(`coauth:login:global:${window}`, GLOBAL, WINDOW_MS);
+}
+
+/** Check and consume a signing attempt.
+ *
+ * Signing takes the clinician's credential, so it is a place the credential can
+ * be guessed at. Its own budget, separate from the login one, so exhausting
+ * either does not lock the clinician out of the other. */
+export async function rateLimitSign(req: Request): Promise<RateVerdict> {
+  const window = Math.floor(Date.now() / WINDOW_MS);
+  // Deliberately far more generous than the login budget, and with NO global
+  // window. A clinic behind one NAT egress shares a source address, and a
+  // signing limit tuned for credential guessing would be a clinical outage for
+  // everyone behind it. A global cap would be worse still: it would let one
+  // attacker stop every clinician on the deployment from signing.
+  return kvHit(`coauth:sign:ip:${callerKey(req)}:${window}`, SIGN_PER_CALLER, WINDOW_MS);
 }

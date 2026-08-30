@@ -8,8 +8,10 @@ export function Intro({ onWatch, onClose }: { onWatch: () => void; onClose: () =
         <div className="intro-mark">CoAuth</div>
         <h1>A prior authorization a clinician and an agent fill out together.</h1>
         <p className="intro-lead">
-          About <strong>82% of denied prior authorizations get overturned on appeal</strong>: the decision was
-          usually fine, the paperwork was not. CoAuth exposes the payer form to an AI agent as <strong>WebMCP
+          In Medicare Advantage in 2024, <strong>80.7% of appealed prior-authorization denials were
+          fully or partially overturned</strong>, and only 11.5% were appealed at all{" "}
+          (<a href="https://www.kff.org/medicare/medicare-advantage-insurers-made-nearly-53-million-prior-authorization-determinations-in-2024/" target="_blank" rel="noreferrer">KFF</a>).
+          Most denials that get contested turn out to have been wrong, and most are never contested. CoAuth exposes the payer form to an AI agent as <strong>WebMCP
           tools</strong>, so the agent handles the fields and the checks while the clinician keeps the judgment
           calls and the signature.
         </p>

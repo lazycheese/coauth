@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useCoAuth } from "../store/coauthStore";
 import { humanActions } from "../app/actions";
+import { humanOnly } from "../lib/humanGesture";
 
 interface Command {
   label: string;
@@ -95,10 +96,13 @@ export function CommandPalette() {
             <button
               key={c.label}
               className="cmd-item"
-              onClick={async () => {
+              // Every palette entry calls a tool and records it as the
+              // clinician's action, so a script pressing one would attribute
+              // its own work to them.
+              onClick={humanOnly("command_palette", `a script tried to run "${c.label}"`, async () => {
                 setOpen(false);
                 await c.run();
-              }}
+              })}
             >
               <span>{c.label}</span>
               <span className="cmd-hint">{c.hint}</span>

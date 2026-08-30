@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { useCoAuth } from "../store/coauthStore";
+import { isHumanGesture } from "../lib/humanGesture";
 
 function ConflictCard({ id, severity, label, detail, requiresHumanOverride }: {
   id: string; severity: string; label: string; detail: string; requiresHumanOverride: boolean;
@@ -40,7 +41,7 @@ function ConflictCard({ id, severity, label, detail, requiresHumanOverride }: {
             // to tick. Typed by a script, it is recorded as the script's.
             onChange={(e) => {
               setText(e.target.value);
-              setTypedByScript((prev) => prev || !e.nativeEvent.isTrusted);
+              setTypedByScript((prev) => prev || !isHumanGesture(e));
             }}
           />
           <button
@@ -48,7 +49,7 @@ function ConflictCard({ id, severity, label, detail, requiresHumanOverride }: {
             data-testid={`override-btn-${id}`}
             disabled={text.trim().length < 8}
             onClick={(e) => {
-              if (!e.nativeEvent.isTrusted || typedByScript) {
+              if (!isHumanGesture(e) || typedByScript) {
                 logActivity("agent", "override", `REFUSED - ${id}: an override must be written and recorded by the clinician`);
                 setRefused(true);
                 return;

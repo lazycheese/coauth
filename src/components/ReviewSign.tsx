@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { useCoAuth } from "../store/coauthStore";
 import { humanActions } from "../app/actions";
 import { useSession } from "../lib/useSession";
+import { isHumanGesture } from "../lib/humanGesture";
 
 export function ReviewSign() {
   const validation = useCoAuth((s) => s.validation);
@@ -77,7 +78,7 @@ export function ReviewSign() {
   const onSign = async (e?: React.MouseEvent) => {
     // A signature is an act, not a state transition. A synthetic click is not
     // the clinician signing, whatever the form happens to contain.
-    if (e && !e.nativeEvent.isTrusted) {
+    if (e && !isHumanGesture(e)) {
       logActivity("agent", "sign", "REFUSED - a script cannot sign for the clinician");
       return;
     }
@@ -93,7 +94,13 @@ export function ReviewSign() {
   };
   const submitted = submitResult?.status === "submitted";
 
-  const onSubmit = async () => {
+  const onSubmit = async (e?: React.MouseEvent) => {
+    // Filing is the irreversible step. The clinician signed, but signing and
+    // filing are separate decisions and the second one is theirs as well.
+    if (e && !isHumanGesture(e)) {
+      logActivity("agent", "submit", "REFUSED - a script cannot file the submission");
+      return;
+    }
     // An approval is good for one submission, so a second click would be
     // refused by the server and its refusal would overwrite the confirmation
     // already on screen. Guard the click rather than explain the wreckage.
@@ -218,7 +225,7 @@ export function ReviewSign() {
               disabled={!authed || missing > 0 || judgmentPending.length > 0 || agentWritten.length > 0 || unresolvedCritical.length > 0}
               // Same reasoning as the form fields: only a real click attests.
               onChange={(e) => {
-                if (!e.nativeEvent.isTrusted) {
+                if (!isHumanGesture(e)) {
                   logActivity("agent", "attest", "REFUSED - a script cannot tick the clinician's attestation");
                   return;
                 }

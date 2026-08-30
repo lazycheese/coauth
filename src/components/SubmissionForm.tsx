@@ -4,6 +4,7 @@ import type { FieldDef } from "../data/seed";
 import { RiskMeter } from "./RiskMeter";
 import { ConflictAlerts } from "./ConflictAlerts";
 import { scanUntrusted } from "../rules/untrusted";
+import { humanOnly, isHumanGesture } from "../lib/humanGesture";
 import { humanActions } from "../app/actions";
 
 function FieldRow({ field, flash }: { field: FieldDef; flash: boolean }) {
@@ -84,12 +85,15 @@ function FieldRow({ field, flash }: { field: FieldDef; flash: boolean }) {
                   type="button"
                   className="doc"
                   data-testid={`pick-${field.id}-${d.id}`}
-                  onClick={() => {
+                  // Attaching evidence is what satisfies a screening
+                  // requirement, and it is logged as the clinician's act. A
+                  // script clicking it was recorded as a person doing so.
+                  onClick={humanOnly("attach_evidence", `${d.id} -> ${field.id} was clicked by a script`, () => {
                     attach(field.id, d.id);
                     runValidation();
                     logActivity("human", "attach_evidence", `${d.id} -> ${field.id}`);
                     setPicking(false);
-                  }}
+                  })}
                 >
                   {d.label}
                   {!scanUntrusted(d.content).clean && (
@@ -117,7 +121,7 @@ function FieldRow({ field, flash }: { field: FieldDef; flash: boolean }) {
           <select
             value={(value as string) ?? ""}
             onFocus={() => setFocused(field.id)}
-            onChange={(e) => edit(e.target.value, e.nativeEvent.isTrusted)}
+            onChange={(e) => edit(e.target.value, isHumanGesture(e))}
           >
             <option value="">-</option>
             {field.options?.map((o) => (
@@ -129,14 +133,14 @@ function FieldRow({ field, flash }: { field: FieldDef; flash: boolean }) {
             rows={2}
             value={(value as string) ?? ""}
             onFocus={() => setFocused(field.id)}
-            onChange={(e) => edit(e.target.value, e.nativeEvent.isTrusted)}
+            onChange={(e) => edit(e.target.value, isHumanGesture(e))}
           />
         ) : (
           <input
             type="text"
             value={(value as string) ?? ""}
             onFocus={() => setFocused(field.id)}
-            onChange={(e) => edit(e.target.value, e.nativeEvent.isTrusted)}
+            onChange={(e) => edit(e.target.value, isHumanGesture(e))}
           />
         )}
       </label>
@@ -151,10 +155,16 @@ function FieldRow({ field, flash }: { field: FieldDef; flash: boolean }) {
             <button
               className="btn btn-mini"
               data-testid={`accept-draft-${field.id}`}
-              onClick={() => {
+              // The laundering path, and the most valuable click in the app.
+              // acceptSuggestion rewrites provenance from "agent" to
+              // "clinician", which is exactly what the signing gate reads - so
+              // a script that could press this could have the agent draft the
+              // medical-necessity statement and then adopt it on the
+              // clinician's behalf.
+              onClick={humanOnly("accept_draft", `a script tried to accept the agent's draft for ${field.id}`, () => {
                 acceptSuggestion(field.id);
                 logActivity("human", "accept_draft", `Accepted agent draft for ${field.id}`);
-              }}
+              })}
             >
               Accept &amp; edit
             </button>

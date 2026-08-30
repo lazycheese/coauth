@@ -9,12 +9,14 @@ CoAuth exposes 13 WebMCP tools. The agent can load the patient record, read paye
 rules, fill non-judgment fields, attach evidence, assess denial risk, detect
 clinical conflicts, and draft narrative text and appeal letters. The agent cannot
 fabricate clinician-judgment fields or submit. `fill_field` and
-`attach_evidence` refuse clinician-judgment fields outright, and `submit`
-requires an approval minted only for an authenticated clinician session. No
-WebMCP tool on this page authenticates, so an agent working the form has no
-route to one. (The demo credential is published in the project README, so a
-caller that reads it can authenticate directly against the API. That is a
-property of the demo, not of the design.)
+`attach_evidence` refuse clinician-judgment fields outright; the clinician's
+controls in the page act only on a real interaction, so they cannot be driven by
+script; and `submit` requires an approval minted only for an authenticated
+clinician who supplies their credential at the moment of signing. No WebMCP tool
+on this page authenticates, so an agent working the form has no route to one.
+(The demo credential is published in the project README, so a caller that reads
+it can authenticate against the API directly. That is a property of the demo,
+not of the design.)
 
 ## When to use
 

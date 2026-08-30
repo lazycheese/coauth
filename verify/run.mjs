@@ -13,6 +13,7 @@
 // Browser checks are skipped with a clear note if Playwright is unavailable, so
 // the HTTP checks still run anywhere.
 
+import { readFile } from "node:fs/promises";
 const arg = (name, fallback) => {
   const i = process.argv.indexOf(`--${name}`);
   return i !== -1 && process.argv[i + 1] ? process.argv[i + 1] : fallback;
@@ -553,9 +554,9 @@ async function verifyInBrowser() {
       { timeout: 120000 }
     );
     const blockedText = await page.textContent("[data-testid=blocked-banner]");
-    /signature|sign/i.test(blockedText ?? "")
-      ? ok("the walkthrough runs the agent to the gate and is blocked there", blockedText?.trim().slice(0, 80))
-      : bad("the walkthrough is blocked at the signature", "a signature-related block", blockedText?.trim() ?? "none");
+    /conflict|contraindication|signature|sign/i.test(blockedText ?? "")
+      ? ok("the walkthrough runs the agent to the gate and is blocked there", blockedText?.trim().slice(0, 90))
+      : bad("the walkthrough is blocked before it can file", "a clinical or signature block", blockedText?.trim() ?? "none");
 
     const submitted = await page.$("[data-testid=submitted-banner]");
     !submitted
@@ -564,10 +565,41 @@ async function verifyInBrowser() {
 
     // And the clinician can then finish it, which is the other half of the claim.
     if (await signInAsClinician(page)) {
-      const judgmentInputs = await page.$$("[data-testid=field-medical_necessity] textarea");
-      if (judgmentInputs.length) {
-        await page.fill("[data-testid=field-medical_necessity] textarea", "Reviewed and adopted by the attending.");
+      // Three things the walkthrough deliberately left undone, each guarded by
+      // a real gesture. Playwright's fill and click go through the browser's
+      // input pipeline, so they arrive as trusted - which is the point: a
+      // person can do these and a script in the page cannot.
+      const overrideBox = await page.$("[data-testid=override-input-tb-contra]");
+      if (overrideBox) {
+        await page.fill(
+          "[data-testid=override-input-tb-contra]",
+          "Latent TB treated with INH for 9 months, completed 2026-06; ID cleared to start a biologic."
+        );
+        await page.click("[data-testid=override-btn-tb-contra]");
+        await page.waitForTimeout(400);
+        const stillOpen = await page.$("[data-testid=override-input-tb-contra]");
+        !stillOpen
+          ? ok("a clinician typing and recording an override is accepted")
+          : bad("the clinician can record an override", "the override recorded", "the box is still open");
+      } else {
+        bad("the walkthrough leaves the contraindication for the clinician", "an override box", "none present");
       }
+
+      const acceptBtn = await page.$("[data-testid=accept-draft-medical_necessity]");
+      if (acceptBtn) {
+        await page.click("[data-testid=accept-draft-medical_necessity]");
+        await page.waitForTimeout(300);
+        const prov = await page.textContent("[data-testid=prov-medical_necessity]").catch(() => null);
+        prov?.includes("clinician")
+          ? ok("accepting the agent's draft by hand records it as the clinician's")
+          : bad("accepting a draft attributes it to the clinician", "clinician", prov ?? "no provenance badge");
+      } else {
+        const judgmentInputs = await page.$$("[data-testid=field-medical_necessity] textarea");
+        if (judgmentInputs.length) {
+          await page.fill("[data-testid=field-medical_necessity] textarea", "Reviewed and adopted by the attending.");
+        }
+      }
+
       const attested = await attestAsHuman(page);
       attested
         ? ok("a real keystroke on the attestation is recorded as the clinician's")
@@ -797,6 +829,90 @@ async function verifyRules(page) {
     ? ok("a failed four-month trial recorded in the chart does satisfy it")
     : bad("a charted failed trial satisfies step therapy", "no step-insufficient", charted.join(", "));
 
+  // Each remaining rule, named. These were previously exercised only by their
+  // effect, or not at all, so a rule could be renamed or removed and nothing
+  // would notice.
+  await runCommand("Load patient - Jane Doe");
+  await runCommand("Payer - UnitedHealthcare");
+  await setField("member_id", "UHC-88213");
+  await setField("diagnosis_code", "M06.9");
+
+  await setField("hcpcs_code", "J9999");
+  const unknownDrug = await conflicts();
+  unknownDrug.includes("unknown-drug")
+    ? ok("an unrecognised HCPCS code is caught")
+    : bad("an unrecognised drug code is caught", "unknown-drug", unknownDrug.join(", ") || "none");
+  await setField("hcpcs_code", "J0135");
+
+  await setField("dose", "40 EOW");
+  const unreadable = await conflicts();
+  unreadable.includes("dose-unreadable")
+    ? ok("a dose with no unit is caught rather than skipped")
+    : bad("an unreadable dose is caught", "dose-unreadable", unreadable.join(", ") || "none");
+
+  await setField("dose", "160 mg every week");
+  const frequency = await conflicts();
+  frequency.includes("dose-frequency")
+    ? ok("an induction amount on a weekly schedule is caught")
+    : bad("a dosing frequency error is caught", "dose-frequency", frequency.join(", ") || "none");
+  await setField("dose", "40 mg SC every other week");
+
+  // The evidence field renders as a document slot rather than a text input, and
+  // the specialist attestation belongs to a different payer, so these three are
+  // driven through the real registered tools instead of the form.
+  const toolConflicts = await page.evaluate(async () => {
+    const tools = new Map();
+    document.modelContext = { registerTool: (def) => { tools.set(def.name, def); return Promise.resolve(); } };
+    // The retry loop drops to a five-second poll after its first ten seconds,
+    // so a runtime attaching this late has to be waited for accordingly.
+    await new Promise((r) => setTimeout(r, 7000));
+    if (!tools.size) return { error: "no tools registered" };
+    const call = (n, a) => tools.get(n)?.execute(a ?? {});
+    // The registered payload wraps a tool's return, so the structured object is
+    // under structuredContent rather than at the top level.
+    const ids = async () => {
+      const r = await call("detect_conflicts");
+      return ((r?.conflicts ?? r?.structuredContent?.conflicts) ?? []).map((c) => c.id);
+    };
+
+    await call("load_patient_context", { patientId: "jane-doe" });
+    await call("check_payer_rules", { payer: "uhc" });
+    for (const [k, v] of Object.entries({
+      member_id: "UHC-88213", prescriber_npi: "1487203941", diagnosis_code: "M06.9",
+      hcpcs_code: "J0135", dose: "40 mg SC every other week", quantity: "2 syringes / 28 days",
+      step_therapy: "Methotrexate 4mo, inadequate response",
+    })) await call("fill_field", { fieldId: k, value: v });
+
+    // The store carries whatever the form-driven checks left behind, so the
+    // field is cleared explicitly rather than assumed empty.
+    await call("fill_field", { fieldId: "tb_screen", value: "" });
+    const missing = await ids();
+    await call("fill_field", { fieldId: "tb_screen", value: "not done, pending" });
+    const unusable = await ids();
+
+    await call("load_patient_context", { patientId: "ana-torres" });
+    await call("check_payer_rules", { payer: "cigna" });
+    await call("fill_field", { fieldId: "hcpcs_code", value: "J0135" });
+    await call("fill_field", { fieldId: "diagnosis_code", value: "M45.0" });
+    const specialist = await ids();
+
+    return { missing, unusable, specialist };
+  });
+
+  if (toolConflicts.error) {
+    bad("the rule probe can drive the tools", "registered tools", toolConflicts.error);
+  } else {
+    toolConflicts.missing.includes("tb-evidence-missing")
+      ? ok("missing TB screening evidence is caught")
+      : bad("missing TB evidence is caught", "tb-evidence-missing", toolConflicts.missing.join(", ") || "none");
+    toolConflicts.unusable.includes("tb-evidence-unusable")
+      ? ok("TB evidence that states no result is caught")
+      : bad("unusable TB evidence is caught", "tb-evidence-unusable", toolConflicts.unusable.join(", ") || "none");
+    toolConflicts.specialist.includes("specialist-missing")
+      ? ok("a payer that requires a specialist checks for the attestation")
+      : bad("specialist involvement is checked", "specialist-missing", toolConflicts.specialist.join(", ") || "none");
+  }
+
   // The score explains itself rather than asserting a number.
   const rationale = await page.$$eval(".risk-factor .risk-why", (els) => els.length);
   rationale > 0
@@ -882,10 +998,15 @@ async function verifyDoubleSubmit(page) {
   await page.click("[data-testid=approve-sign]");
   await page.waitForSelector("[data-testid=submit-btn]:not([disabled])", { timeout: 20000 });
 
-  await page.evaluate(() => {
-    const b = document.querySelector("[data-testid=submit-btn]");
-    b.click(); b.click(); b.click();
-  });
+  // Real clicks, fired as fast as the browser will deliver them. Synthetic
+  // clicks are refused now - filing is a human act - so dispatching them from
+  // page script would test the guard rather than the double-submit race this
+  // check exists for.
+  await Promise.all([
+    page.click("[data-testid=submit-btn]", { noWaitAfter: true }).catch(() => {}),
+    page.click("[data-testid=submit-btn]", { noWaitAfter: true, force: true }).catch(() => {}),
+    page.click("[data-testid=submit-btn]", { noWaitAfter: true, force: true }).catch(() => {}),
+  ]);
   await page.waitForSelector("[data-testid=submitted-banner]", { timeout: 20000 });
   await page.waitForTimeout(2500);
 
@@ -1116,6 +1237,89 @@ async function verifyRegistrationIsIdempotent(page) {
     : bad("untrustedContentHint is declared", `${result.total} tools`, `${result.untrustedHinted}`);
 
   await verifyJudgmentFieldsAreRefused(page);
+  await verifyScriptCannotActAsClinician(page);
+}
+
+// ---------------------------------------------------------------------------
+// The clinician's controls, driven by a script rather than a person.
+//
+// Every control whose effect is a clinical decision, or which is recorded as
+// the clinician's act, asks the browser whether a person produced the event.
+// This drives each one the way a script in the page would - setting values
+// through the native setter and dispatching synthetic events - and requires
+// that none of them takes effect.
+// ---------------------------------------------------------------------------
+async function verifyScriptCannotActAsClinician(page) {
+  section("A script reaching for the clinician's controls");
+
+  await page.goto(BASE + "/?script-probe", { waitUntil: "domcontentloaded" });
+  await page.waitForSelector(".app-shell", { timeout: 15000 });
+  await page.click("[data-testid=intro-close]");
+  await page.click("[data-testid=start-marcus-lee]").catch(async () => {
+    await page.click("[data-testid=start-jane-doe]");
+  });
+  await page.waitForSelector("[data-testid=field-member_id]", { timeout: 15000 });
+
+  const result = await page.evaluate(async () => {
+    const setNative = (el, value) => {
+      const proto = el instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+      Object.getOwnPropertyDescriptor(proto, "value").set.call(el, value);
+      el.dispatchEvent(new Event("input", { bubbles: true }));
+    };
+    const out = {};
+
+    // A judgment field, typed by a script through the form.
+    const necessity = document.querySelector("[data-testid=field-medical_necessity] textarea");
+    if (necessity) {
+      setNative(necessity, "The attending has reviewed and agrees this is necessary.");
+      await new Promise((r) => setTimeout(r, 150));
+      out.judgmentProvenance =
+        document.querySelector("[data-testid=prov-medical_necessity]")?.textContent?.trim() ?? "none";
+    }
+
+    // The clinical override that unblocks a contraindication.
+    const box = document.querySelector("[id*=override], [data-testid^=override-input-]");
+    if (box) {
+      setNative(box, "Reviewed and cleared, proceed with the biologic.");
+      await new Promise((r) => setTimeout(r, 100));
+      const btn = document.querySelector("[data-testid^=override-btn-]");
+      btn?.click();
+      await new Promise((r) => setTimeout(r, 250));
+      out.overrideRecorded = !!document.querySelector(".override-note:not(.danger-text)");
+      out.overrideRefused = !!document.querySelector("[data-testid^=override-refused-]");
+    }
+
+    // Attaching evidence, which is what satisfies a screening requirement.
+    document.querySelector("[data-testid=field-tb_screen] .evidence-slot")?.click();
+    await new Promise((r) => setTimeout(r, 150));
+    document.querySelector("[data-testid^=pick-tb_screen-]")?.click();
+    await new Promise((r) => setTimeout(r, 200));
+    out.evidenceAttached = (document.querySelector("[data-testid=field-tb_screen]")?.textContent ?? "").includes("doc-tb");
+
+    // The attestation checkbox.
+    const attest = document.querySelector("[data-testid=attest-checkbox]");
+    attest?.click();
+    await new Promise((r) => setTimeout(r, 150));
+    out.attested = !!attest?.checked;
+
+    return out;
+  });
+
+  result.judgmentProvenance !== "clinician"
+    ? ok("a judgment field typed by a script is not recorded as the clinician's", result.judgmentProvenance)
+    : bad("a script-typed judgment field is not the clinician's", "not clinician", result.judgmentProvenance);
+
+  result.overrideRecorded !== true
+    ? ok("a script cannot record the clinical override that unblocks a contraindication")
+    : bad("the override refuses a script", "not recorded", "recorded");
+
+  result.evidenceAttached !== true
+    ? ok("a script cannot attach the evidence that satisfies a screening requirement")
+    : bad("evidence attachment refuses a script", "not attached", "attached");
+
+  result.attested !== true
+    ? ok("a script cannot tick the clinician's attestation")
+    : bad("the attestation refuses a script", "unticked", "ticked");
 }
 
 // ---------------------------------------------------------------------------
@@ -1201,6 +1405,36 @@ async function verifyJudgmentFieldsAreRefused(page) {
 // cannot choose, so exhausting it here would throttle every other check that
 // needs to sign in.
 // ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// Every clinical rule is named by at least one check.
+//
+// Three safety rules once shipped with no data that reached them, which is how
+// a rule becomes a claim rather than a control. This reads the weights table -
+// the one place every rule must be declared, because the engine looks up its
+// score there - and requires each id to appear somewhere in this file. It fails
+// when a rule is added without a test, which is the moment it is cheapest to
+// fix.
+// ---------------------------------------------------------------------------
+async function verifyRuleCoverage() {
+  section("Every clinical rule has a check");
+
+  const weights = await readFile(new URL("../src/rules/weights.ts", import.meta.url), "utf8");
+  const suite = await readFile(new URL("./run.mjs", import.meta.url), "utf8");
+  const ids = [...weights.matchAll(/^  "([a-z0-9-]+)":\s*\{/gm)].map((m) => m[1]);
+
+  if (!ids.length) {
+    bad("the weights table can be read", "rule ids", "none found");
+    return;
+  }
+  // Count only mentions outside this function, so its own regex does not
+  // vouch for anything.
+  const body = suite.slice(0, suite.indexOf("async function verifyRuleCoverage"));
+  const uncovered = ids.filter((id) => !body.includes(id));
+  uncovered.length === 0
+    ? ok("every rule in the weights table is named by a check", `${ids.length} rules`)
+    : bad("every rule is named by a check", "all covered", `uncovered: ${uncovered.join(", ")}`);
+}
+
 async function verifyLoginThrottle() {
   section("Guessing the clinician passphrase");
 
@@ -1243,6 +1477,7 @@ async function main() {
   await verifyHeaders();
   await verifyInBrowser();
   // Last: it deliberately spends this caller's sign-in budget.
+  await verifyRuleCoverage();
   await verifyLoginThrottle();
 
   console.log(`\n${pass} passed, ${fail} failed, ${skip} skipped`);

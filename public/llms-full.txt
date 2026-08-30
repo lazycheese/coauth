@@ -65,9 +65,15 @@ people, and are treated as untrusted content rather than instructions. Tools
 scan record text for material that reads as an instruction (telling the reader
 to ignore its directions, to approve without review, or to conceal something
 from the clinician) and return it under untrustedContent with a warning.
-Detection is best-effort; the guarantee is structural instead: judgment fields
-cannot be filled by a tool and submission requires a clinician signature minted
-and verified by the server, so injected text cannot reach either.
+Detection is best-effort and is not the protection that matters. The structural
+controls are: fill_field and attach_evidence both refuse clinician-judgment
+fields, resolved from a static catalogue rather than from whatever payer happens
+to be loaded; the controls in the page that record a clinical decision act only
+on a real interaction, so a script cannot type an override, accept a draft,
+attach evidence or tick the attestation; and an approval is minted only for an
+authenticated clinician who supplies their credential at the moment of signing,
+so a session cookie - which any script in the page carries - is not enough.
+Injected text cannot reach any of those.
 
 ## Safety
 

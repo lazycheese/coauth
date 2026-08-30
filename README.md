@@ -57,11 +57,21 @@ about:
 
 - `fill_field` and `attach_evidence` both **refuse** any field the payer marks
   as requiring clinician judgment. The judgment field ids are absent from their
-  schema enums and rejected by the executors, so a model that ignores the
-  description still cannot write one. The Review panel refuses to enable signing
-  over a judgment field whose provenance is an agent, and provenance follows the
-  browser's `isTrusted` flag, so a value written by a script is recorded as the
-  script's even when it arrives through the form.
+  schema enums and rejected by the executors, and the executors resolve them
+  from a static catalogue of every field any payer defines - not from whatever
+  payer happens to be loaded, which is how an agent that skipped
+  `check_payer_rules` used to slip past the check.
+- **Every control that records a clinical decision acts only on a real
+  interaction.** The field inputs, the evidence picker, the accept-draft button,
+  the override box, the attestation and the signature all ask the browser
+  whether a person produced the event. A script in the page can read the form,
+  but it cannot type an override, adopt the agent's draft as the clinician's, or
+  tick the attestation - and each attempt is recorded in the activity trail as a
+  refusal rather than dropped silently.
+- **Signing requires the clinician's credential each time, not just their
+  session.** A session cookie travels with every request the page makes,
+  including one a script makes, so a session alone would let page JavaScript
+  mint approvals under the clinician's identity.
 - An approval is minted **only for an authenticated clinician session**
   (`POST /api/v1/login`, an HttpOnly cookie the page cannot read). The signer
   recorded in the token is taken from that session and never from the request

@@ -52,11 +52,13 @@ Both halves of that are enforced in code rather than described in prose, which
 was not true of an earlier version of this project and is worth being explicit
 about:
 
-- `fill_field` **refuses** any field the payer marks as requiring clinician
-  judgment. The judgment field ids are absent from its schema enum and rejected
-  by the executor, so a model that ignores the description still cannot write
-  one. The Review panel additionally refuses to enable signing over a judgment
-  field whose provenance is an agent.
+- `fill_field` and `attach_evidence` both **refuse** any field the payer marks
+  as requiring clinician judgment. The judgment field ids are absent from their
+  schema enums and rejected by the executors, so a model that ignores the
+  description still cannot write one. The Review panel refuses to enable signing
+  over a judgment field whose provenance is an agent, and provenance follows the
+  browser's `isTrusted` flag, so a value written by a script is recorded as the
+  script's even when it arrives through the form.
 - An approval is minted **only for an authenticated clinician session**
   (`POST /api/v1/login`, an HttpOnly cookie the page cannot read). The signer
   recorded in the token is taken from that session and never from the request
@@ -104,8 +106,9 @@ npm run dev        # http://localhost:5173
 
 Open in **ChatGPT's browser** or **Chrome 149+ with WebMCP enabled** to drive it
 with your own prompts, e.g. *"Start a prior auth for Marcus Lee's Humira request
-with Aetna."* Or click **▶ Watch demo** to run the full narrative autonomously,
-or press **⌘K / Ctrl-K** for the tool command palette.
+with Aetna."* Or click **Scripted walkthrough** to watch the agent half of the
+flow run on its own - it stops at the signature, which is the clinician's - or
+press **Cmd-K / Ctrl-K** for the tool command palette.
 
 ## Verifying it
 
@@ -123,8 +126,12 @@ signing, with an approval already used, and with one replayed at a different
 payer; it checks the MCP endpoint against the Streamable HTTP spec; it confirms
 the approval UI cannot be framed; and it clicks through the whole walkthrough,
 confirming that production ships no inspection handle, that a document carrying
-instruction-like text is flagged, and that the tool path never writes to a
-clinician-only field.
+instruction-like text is flagged, and that the tool surface refuses every
+clinician-only field it is asked to write.
+
+It also drives the registered WebMCP tools through a model-context surface and
+attempts, as an agent would, to set the attending attestation - which is the
+single claim this project rests on.
 
 Browser checks need a browser: `npx playwright install chromium`. Without one
 they are skipped and the HTTP checks still run.
@@ -169,9 +176,22 @@ what that does and does not mean.
 - **Drafted clinical text is scaffolding.** It states what the record supports
   and leaves every clinical conclusion to the clinician. It is not usable prose
   as-is and is marked as a draft.
-- **The signer is identified, not authenticated.** There is no login, so the
-  signature binds a name that the person typed. Real use would need an
-  authenticated identity tied to a credential.
+- **The signer is authenticated against a shared demo credential.** Minting an
+  approval requires a clinician session, and the signer recorded in the token
+  comes from that session rather than from the request. But every demo clinician
+  shares one passphrase, and that passphrase is published in this README, so
+  anyone who reads it can authenticate as Dr. Alvarez. What the gate establishes
+  is that signing requires a credential and that the audit trail records a
+  server-established identity. What it does not establish is that the identity
+  belongs to the person using it. Real use needs an identity provider and
+  per-clinician credentials.
+- **The clinician-judgment control is page-side, and the server cannot check
+  it.** `fill_field` and `attach_evidence` refuse those fields, and the review
+  panel refuses to sign over agent-written or script-written values. All of that
+  lives in the browser. The server can see that a judgment field is filled; it
+  cannot see who typed it. So a caller holding a valid session can sign a
+  submission whose judgment text an agent wrote. The provenance rules are what
+  keep an agent driving the page from doing it, not a server-side guarantee.
 - **Replay protection is best-effort here.** Approvals are single-use, and the
   claim is atomic when a KV store is configured. This deployment has none, so it
   falls back to per-instance memory and the API says so in its response rather

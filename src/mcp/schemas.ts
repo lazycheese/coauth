@@ -29,6 +29,8 @@ const judgmentFieldIds = fieldEntries.filter((f) => f.requiresHumanJudgment).map
  * central promise. The tool refuses them as well, so the schema is a hint and
  * the executor is the control. */
 const fillableFieldIds = fieldEntries.filter((f) => !f.requiresHumanJudgment).map((f) => f.id);
+/** Fields that actually take a document. */
+const evidenceFieldIds = fieldEntries.filter((f) => f.type === "evidence" && !f.requiresHumanJudgment).map((f) => f.id);
 const fillableFieldList = fieldEntries
   .filter((f) => !f.requiresHumanJudgment)
   .map((f) => `${f.id} (${f.label})`)
@@ -92,8 +94,13 @@ export const schemas = {
     properties: {
       fieldId: {
         type: "string",
-        enum: fieldIds,
-        description: "Evidence field to attach the document to, for example tb_screen.",
+        // Evidence fields only. This used to accept every field id, which made
+        // it a second, unguarded way into the clinician-judgment fields: an
+        // agent refused by fill_field could attach a document id over the
+        // attestation instead, and validate_submission would then report the
+        // clinician's work as done.
+        enum: evidenceFieldIds,
+        description: `Evidence field to attach the document to. Accepts: ${evidenceFieldIds.join(", ")}. Clinician-judgment fields are refused, as they are by fill_field.`,
       },
       docId: {
         type: "string",

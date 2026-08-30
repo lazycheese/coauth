@@ -49,32 +49,43 @@ export function unregisterTools() {
   useCoAuth.getState().setWebmcpConnected(false);
 }
 
-export function registerTools() {
+export async function registerTools() {
   const surfaces = modelContexts();
   const toolPayload = (t: ToolDef): WebMcpToolPayload => ({
     name: t.name,
     title: t.title,
     description: t.description,
     inputSchema: t.inputSchema,
+    // WebMCP's ToolAnnotations dictionary carries only readOnlyHint and
+    // untrustedContentHint. The MCP-server annotations - title,
+    // destructiveHint, idempotentHint, openWorldHint - are not members of it,
+    // and WebIDL discards unknown members silently, so sending them achieved
+    // nothing except making this look more thorough than it was.
+    //
+    // untrustedContentHint is the one that matters here and was missing: it
+    // marks a tool whose result carries text written by someone other than the
+    // page, which is exactly what a chart note or a scanned outside record is.
     annotations: {
-      title: t.title,
       readOnlyHint: t.readOnlyHint,
-      destructiveHint: t.destructiveHint ?? false,
-      idempotentHint: t.idempotentHint ?? t.readOnlyHint,
-      openWorldHint: false,
+      untrustedContentHint: t.untrustedContentHint ?? false,
     },
-    // Agents read content[0].text. Handing them raw JSON is worse for
-    // comprehension and costs more tokens than a sentence, so the summary goes
-    // in the text and the machine-readable object goes in structuredContent.
+    // The runtime serializes whatever execute returns, so the summary and the
+    // structured object both travel. The summary leads because a sentence is
+    // cheaper to read than a JSON blob and says what to do next.
     execute: async (input: unknown) => {
       const result = await t.execute(input);
       const { summary, ...rest } = result as { summary?: string };
       return {
         content: [{ type: "text", text: summary ?? JSON.stringify(rest) }],
         structuredContent: result,
-        isError: (result as { status?: string }).status === "error",
-        // "blocked" is a deliberate outcome, not a failure, so it is not
-        // flagged as an error; the summary tells the agent what to do next.
+        // A refusal is an error from the caller's point of view: the call did
+        // not do what was asked and must not be retried unchanged. "blocked" is
+        // different - it is a deliberate outcome of a correct call, so it is
+        // not flagged, and the summary tells the agent what to do next.
+        isError:
+          (result as { status?: string }).status === "error" ||
+          (result as { status?: string }).status === "refused" ||
+          (result as { isError?: boolean }).isError === true,
       };
     },
   });
@@ -87,7 +98,12 @@ export function registerTools() {
     let acceptedAll = true;
     for (const t of tools) {
       try {
-        md.registerTool(toolPayload(t), { signal: controller.signal });
+        // registerTool returns a promise and rejects on a duplicate name, an
+        // invalid descriptor or an already-aborted signal. Calling it without
+        // awaiting counted a rejection as a success and raised an unhandled
+        // rejection, so a page could report itself connected over a
+        // registration the runtime had refused.
+        await md.registerTool(toolPayload(t), { signal: controller.signal });
         registered++;
       } catch (e) {
         // A surface rejected this tool shape. Record it: a partial registration
@@ -143,24 +159,32 @@ export function registerTools() {
  * page; registration is idempotent per surface, so a late success costs nothing
  * and a surface is never registered twice. */
 export function registerToolsWithRetry() {
-  if (registerTools()) return;
   let tries = 0;
-  let id = setInterval(fast, 500);
+  let id: ReturnType<typeof setInterval>;
 
-  function fast() {
-    tries++;
+  const attempt = async () => {
     // Each attempt only touches surfaces not already registered, so polling for
     // a late-arriving runtime cannot duplicate tools on one that answered.
-    if (registerTools()) return clearInterval(id);
-    if (tries >= 20) {
+    if (await registerTools()) {
       clearInterval(id);
-      // Ten seconds covers a runtime that is merely slow. Past that it is more
-      // likely one that has not attached yet, so keep a cheap watch open rather
-      // than deciding this page will never have tools.
-      id = setInterval(() => {
-        if (registerTools()) clearInterval(id);
-      }, 5000);
+      return true;
     }
-  }
+    return false;
+  };
+
+  void registerTools().then((done) => {
+    if (done) return;
+    id = setInterval(() => {
+      tries++;
+      void attempt().then((ok) => {
+        if (ok || tries < 20) return;
+        clearInterval(id);
+        // Ten seconds covers a runtime that is merely slow. Past that it is
+        // more likely one that has not attached yet, so keep a cheap watch open
+        // rather than deciding this page will never have tools.
+        id = setInterval(() => void attempt(), 5000);
+      });
+    }, 500);
+  });
 }
 

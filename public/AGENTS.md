@@ -42,8 +42,8 @@ and verified by the server.
 - Never resolve a critical clinical conflict (e.g. a contraindication) yourself -
   surface it; the clinician records the override.
 - `submit` requires a signature minted for an authenticated clinician session.
-  No tool authenticates, so you cannot obtain one; this is expected, not a
-  failure. If it returns `blocked`, relay that to the
+  No WebMCP tool on this page authenticates, so you cannot obtain one from here;
+  this is expected, not a failure. If it returns `blocked`, relay that to the
   clinician rather than retrying.
 
 ## Tools

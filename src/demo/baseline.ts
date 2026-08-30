@@ -157,18 +157,24 @@ export async function runBaseline(onStep?: (s: string) => void, handle?: RunHand
     const value = guess(labelText, facts);
     if (!value) continue;
 
-    // It cannot tell a clinician-judgment field from any other input.
-    if (judgmentIds.has(fieldId)) judgmentTouched++;
-
+    // Count what actually lands, not what is attempted: the tool arm counts
+    // writes the tool surface let through, so the baseline has to be counted
+    // the same way or the two columns are different measurements.
+    let wrote = false;
     if (select) {
       const opt = Array.from(select.options).find((o) => o.value === value);
       if (opt) {
         select.value = opt.value;
         select.dispatchEvent(new Event("change", { bubbles: true }));
+        wrote = true;
       }
     } else if (control) {
       setNative(control, value);
+      wrote = true;
     }
+
+    // It cannot tell a clinician-judgment field from any other input.
+    if (wrote && judgmentIds.has(fieldId)) judgmentTouched++;
   }
 
   onStep?.("Checking the result");

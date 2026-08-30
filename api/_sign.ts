@@ -65,15 +65,23 @@ export function newJti(): string {
 
 /** Digest of the submission being attested to.
  *
- * Covers the chart as well as the payer and the form, so an approval given for
- * one patient cannot be presented for another whose form happens to match. */
+ * Covers the chart and the clinician's overrides as well as the payer and the
+ * form. The overrides matter as much as any field: an override is the rationale
+ * that unblocks a critical contraindication, so a digest that omitted it let a
+ * valid, correctly-attributed approval be filed with a clinical justification
+ * the named clinician never wrote. An approval is a statement about a specific
+ * submission, and the overrides are part of that submission. */
 export async function digestOf(
   secret: string,
   payer: string,
   patientId: string,
-  formFields: Record<string, unknown>
+  formFields: Record<string, unknown>,
+  overrides: Record<string, string> = {}
 ): Promise<string> {
-  return hmac(secret, `${payer}\n${patientId}\n${canonicalize(formFields)}`);
+  return hmac(
+    secret,
+    `${payer}\n${patientId}\n${canonicalize(formFields)}\n${canonicalize(overrides)}`
+  );
 }
 
 export async function mint(

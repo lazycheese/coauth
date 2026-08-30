@@ -61,7 +61,7 @@
     "humanGatedTools": [
       "submit"
     ],
-    "notes": "submit requires an approval minted only for an authenticated clinician session; no tool authenticates, so an agent has no route to one. fill_field refuses clinician-judgment fields outright, and the submit endpoint independently re-runs the clinical rules, so bypassing the page bypasses nothing."
+    "notes": "submit requires an approval minted only for an authenticated clinician session. No WebMCP tool on this page authenticates, so an agent working the form has no route to one; the demo credential is published in the project README, so a caller that reads it can authenticate against the API directly. fill_field and attach_evidence refuse clinician-judgment fields. The submit endpoint independently re-runs the clinical rules, so bypassing the page does not bypass those - but provenance is a page-side control the server cannot check, so it does not carry across."
   },
   "openapi": "https://coauth.vercel.app/openapi.json",
   "contact": "https://github.com/lazycheese/coauth"

@@ -69,7 +69,13 @@ export function ReviewSign() {
     }
   };
 
-  const onSign = async () => {
+  const onSign = async (e?: React.MouseEvent) => {
+    // A signature is an act, not a state transition. A synthetic click is not
+    // the clinician signing, whatever the form happens to contain.
+    if (e && !e.nativeEvent.isTrusted) {
+      logActivity("agent", "sign", "REFUSED - a script cannot sign for the clinician");
+      return;
+    }
     setSigning(true);
     try {
       const token = await sign("I attest this prior authorization is clinically accurate.");
@@ -203,7 +209,14 @@ export function ReviewSign() {
               data-testid="attest-checkbox"
               checked={attested}
               disabled={!authed || missing > 0 || judgmentPending.length > 0 || agentWritten.length > 0 || unresolvedCritical.length > 0}
-              onChange={(e) => setAttested(e.target.checked)}
+              // Same reasoning as the form fields: only a real click attests.
+              onChange={(e) => {
+                if (!e.nativeEvent.isTrusted) {
+                  logActivity("agent", "attest", "REFUSED - a script cannot tick the clinician's attestation");
+                  return;
+                }
+                setAttested(e.target.checked);
+              }}
             />
             <span>I attest this prior authorization is clinically accurate.</span>
           </label>

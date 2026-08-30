@@ -88,7 +88,7 @@ export default async function handler(req: Request): Promise<Response> {
     clinicianId: session.sub,
     npi: session.npi,
     ts: Date.now(),
-    digest: await digestOf(secret, payer, patientId, formFields),
+    digest: await digestOf(secret, payer, patientId, formFields, overrides),
     jti: newJti(),
   };
   const mac = await mint(secret, payload);

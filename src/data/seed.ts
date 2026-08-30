@@ -34,6 +34,12 @@ export interface PayerRules {
     minDmardMonths: number;
     minDmardCount: number;
     requiresSpecialist: boolean;
+    /** How recent a TB screen must be, in months, per the written policy.
+     *
+     * The policy text promised a window long before anything evaluated one, so
+     * a screen from three years ago satisfied the requirement. A number here is
+     * a number the rules engine can check. */
+    tbScreenMaxAgeMonths: number;
   };
   requiredFields: FieldDef[];
 }
@@ -221,7 +227,7 @@ export const payers: Record<string, PayerRules> = {
       "Negative TB screening within 12 months prior to initiating a biologic.",
       "Prescriber attestation of medical necessity.",
     ],
-    criteria: { minDmardMonths: 3, minDmardCount: 1, requiresSpecialist: false },
+    criteria: { minDmardMonths: 3, minDmardCount: 1, requiresSpecialist: false, tbScreenMaxAgeMonths: 12 },
     requiredFields: [
       ...baseFields,
       { id: "step_exception_rationale", label: "Step-therapy exception rationale", type: "longtext", requiresHumanJudgment: true },
@@ -239,7 +245,7 @@ export const payers: Record<string, PayerRules> = {
       "Negative TB screening required prior to biologic therapy.",
       "Statement of medical necessity from prescriber.",
     ],
-    criteria: { minDmardMonths: 3, minDmardCount: 1, requiresSpecialist: false },
+    criteria: { minDmardMonths: 3, minDmardCount: 1, requiresSpecialist: false, tbScreenMaxAgeMonths: 12 },
     requiredFields: [
       ...baseFields,
       { id: "medical_necessity", label: "Statement of medical necessity", type: "longtext", requiresHumanJudgment: true },
@@ -257,7 +263,7 @@ export const payers: Record<string, PayerRules> = {
       "Negative TB screening within 6 months.",
       "Statement of medical necessity.",
     ],
-    criteria: { minDmardMonths: 3, minDmardCount: 2, requiresSpecialist: true },
+    criteria: { minDmardMonths: 3, minDmardCount: 2, requiresSpecialist: true, tbScreenMaxAgeMonths: 6 },
     requiredFields: [
       ...baseFields,
       { id: "specialist_attestation", label: "Rheumatology specialist attestation", type: "select", options: ["Rheumatologist", "Consulted rheumatology", "Neither"], requiresHumanJudgment: true },

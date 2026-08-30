@@ -163,7 +163,30 @@ async function verifyApprovalGate() {
   check("the confirmation is derived from the approval, not the form", honest.json?.confirmationId?.slice(3), token.jti.slice(0, 8).toUpperCase());
 
   const replay = await post("/api/v1/submit", { payer: "uhc", patientId: "jane-doe", formFields: JANE_FORM, token });
-  check("the same approval cannot be used twice", replay.json?.error?.code, "approval_already_used");
+  check("the same approval cannot be used twice, one after another", replay.json?.error?.code, "approval_already_used");
+
+  // Sequentially is the easy case: it lands on a warm instance that remembers
+  // the claim. The claim that matters is that ONE approval files ONE prior
+  // authorization, and a serverless deployment answers concurrent requests from
+  // several instances that share nothing unless a durable store is configured.
+  // Replaying in parallel is what actually tests it, and asserting the easy
+  // case while the hard one fails is how a suite ends up certifying a guarantee
+  // the deployment does not hold.
+  const parallelToken = await signOne();
+  const burst = await Promise.all(
+    Array.from({ length: 12 }, () =>
+      post("/api/v1/submit", { payer: "uhc", patientId: "jane-doe", formFields: JANE_FORM, token: parallelToken })
+    )
+  );
+  const accepted = burst.filter((r) => r.json?.status === "submitted");
+  const protection = burst.find((r) => r.json?.replayProtection)?.json?.replayProtection ?? "unknown";
+  accepted.length === 1
+    ? ok("one approval files exactly one submission under concurrent replay", `${accepted.length} of 12 accepted, ${protection}`)
+    : bad(
+        "one approval files exactly one submission under concurrent replay",
+        "exactly 1 accepted",
+        `${accepted.length} of 12 accepted (replay protection: ${protection}). Configure KV_REST_API_URL and KV_REST_API_TOKEN so the claim is atomic across edge instances.`
+      );
 
   const fresh = await signOne();
 
@@ -210,7 +233,75 @@ async function verifyApprovalGate() {
     "critical_conflict"
   );
 
-  // 6. Sign-out actually ends the session.
+  // 6. The clinical override is part of what was signed.
+  //
+  //    An override is the rationale that unblocks a critical contraindication.
+  //    It was previously read from the request body and covered by nothing, so
+  //    a valid, correctly-attributed approval could be filed with a
+  //    justification the named clinician never wrote.
+  const marcusOverrideForm = { ...JANE_FORM, member_id: "UHC-55719", step_therapy: "Methotrexate 1mo, ongoing" };
+  const realRationale = { "tb-contra": "Latent TB treated (INH x9 months, completed 2026-06); ID cleared for biologic." };
+  const overrideSigned = await post(
+    "/api/v1/sign",
+    { payer: "uhc", patientId: "marcus-lee", formFields: marcusOverrideForm, overrides: realRationale, attestation: "I attest.", signer: "x" },
+    auth
+  );
+  const overrideToken = overrideSigned.json?.token;
+  if (!overrideToken) {
+    bad("a clinician can sign with a documented override", "a token", JSON.stringify(overrideSigned.json?.error ?? {}).slice(0, 120));
+  } else {
+    const swapped = await post("/api/v1/submit", {
+      payer: "uhc", patientId: "marcus-lee", formFields: marcusOverrideForm,
+      overrides: { "tb-contra": "ignore, this is fine" },
+      token: overrideToken,
+    });
+    check("the override cannot be swapped after signing", swapped.json?.error?.code, "form_modified");
+
+    const dropped = await post("/api/v1/submit", {
+      payer: "uhc", patientId: "marcus-lee", formFields: marcusOverrideForm, token: overrideToken,
+    });
+    check("the override cannot be dropped after signing", dropped.json?.error?.code, "form_modified");
+
+    const filed = await post("/api/v1/submit", {
+      payer: "uhc", patientId: "marcus-lee", formFields: marcusOverrideForm, overrides: realRationale, token: overrideToken,
+    });
+    check("the submission the clinician actually signed is accepted", filed.json?.status, "submitted");
+    check("the override rationale is recorded in the audit trail", filed.json?.audit?.overrides?.["tb-contra"], realRationale["tb-contra"]);
+  }
+
+  // 7. Malformed and hostile session input answers in JSON, never a platform 500.
+  const badCookie = await fetch(BASE + "/api/v1/session", { headers: { cookie: "coauth_session=%zz" } });
+  check("a malformed session cookie does not fault the API", badCookie.status, 200);
+  const badCookieSign = await post(
+    "/api/v1/sign",
+    { payer: "uhc", patientId: "jane-doe", formFields: JANE_FORM, attestation: "I attest.", signer: "x" },
+    { cookie: "coauth_session=%zz" }
+  );
+  check("...and a malformed cookie is simply unauthenticated", badCookieSign.status, 401);
+
+  const proto = await post("/api/v1/login", { clinicianId: "constructor", passphrase });
+  check("a prototype-chain clinician id is not a clinician", proto.status, 401);
+
+  // 8. The credential endpoint is throttled.
+  //
+  //    One passphrase mints every signature on this deployment, so unlimited
+  //    guesses against it would be the weakest hinge in the whole gate. Run
+  //    last, because it deliberately exhausts this caller's budget.
+  //    Attempts come from a distinct source address so this exercises the
+  //    per-caller budget rather than spending the one the rest of the suite is
+  //    using - which is also what makes it a test of per-caller throttling
+  //    rather than of a global one.
+  const attacker = { "x-forwarded-for": "203.0.113.7" };
+  let sawThrottle = false;
+  for (let i = 0; i < 40 && !sawThrottle; i++) {
+    const attempt = await post("/api/v1/login", { clinicianId: "a-alvarez", passphrase: `guess-${i}` }, attacker);
+    if (attempt.status === 429) sawThrottle = true;
+  }
+  sawThrottle
+    ? ok("repeated sign-in attempts are throttled")
+    : bad("sign-in attempts are throttled", "a 429 within 40 guesses", "every guess was answered");
+
+  // 9. Sign-out actually ends the session.
   const out = await fetch(BASE + "/api/v1/session", { method: "DELETE", headers: auth });
   check("a clinician can sign out", out.status, 200);
 }
@@ -322,10 +413,16 @@ async function verifyHeaders() {
     : bad("the approval UI cannot be framed", "frame-ancestors 'none'", csp || "no CSP");
   check("X-Frame-Options is set for older clients", res.headers.get("x-frame-options"), "DENY");
   check("content sniffing is disabled", res.headers.get("x-content-type-options"), "nosniff");
+  // Sent deliberately, and honestly reported as aspirational: "tools" is not a
+  // recognised Permissions-Policy feature outside the WebMCP origin trial, and
+  // Chrome currently logs "Origin trial controlled feature not enabled" and
+  // ignores it. Asserting on the header's presence would score a control that
+  // does not yet control anything, which is the pattern this suite exists to
+  // avoid - so this check says what it actually establishes.
   const pp = res.headers.get("permissions-policy") ?? "";
   pp.includes("tools=(self)")
-    ? ok("the WebMCP tools policy is pinned to this origin")
-    : bad("the WebMCP tools policy is pinned", "tools=(self)", pp || "not set");
+    ? ok("the WebMCP tools policy is declared, ready for when browsers honour it", "not yet enforced by any shipping browser")
+    : bad("the WebMCP tools policy is declared", "tools=(self)", pp || "not set");
   (res.headers.get("strict-transport-security") ?? "").includes("max-age=")
     ? ok("HSTS is enabled")
     : bad("HSTS is enabled", "max-age=...", "not set");
@@ -401,7 +498,10 @@ async function verifyInBrowser() {
       if (judgmentInputs.length) {
         await page.fill("[data-testid=field-medical_necessity] textarea", "Reviewed and adopted by the attending.");
       }
-      await page.selectOption("[data-testid=field-attending_attestation] select", "Attested").catch(() => {});
+      const attested = await attestAsHuman(page);
+      attested
+        ? ok("a real keystroke on the attestation is recorded as the clinician's")
+        : bad("the attestation is attributed to the clinician", "provenance clinician", "not set or not attributed");
       await page.waitForTimeout(400);
       const attest = await page.$("[data-testid=attest-checkbox]:not([disabled])");
       if (attest) {
@@ -629,6 +729,27 @@ async function verifyRules(page) {
 // the second attempt is refused, and that refusal must not land on top of the
 // confirmation for the submission that succeeded.
 // ---------------------------------------------------------------------------
+/** Set the attending attestation with real key events.
+ *
+ * page.selectOption sets the value from injected script, so the change event
+ * arrives with isTrusted false - and the app now records that as a script's
+ * write, not the clinician's, which is the control working rather than a bug.
+ * Driving it from the keyboard produces the events a person produces. */
+async function attestAsHuman(page) {
+  const sel = "[data-testid=field-attending_attestation] select";
+  if (!(await page.$(sel))) return false;
+  await page.focus(sel);
+  await page.keyboard.press("a"); // "Attested" - type-ahead selection
+  await page.waitForTimeout(300);
+  const value = await page.$eval(sel, (el) => el.value);
+  if (value !== "Attested") return false;
+  const prov = await page.$eval(
+    "[data-testid=field-attending_attestation]",
+    (el) => el.querySelector("[data-testid^=prov-]")?.textContent?.trim() ?? ""
+  );
+  return prov === "clinician";
+}
+
 /** Sign in through the interface, the way a clinician does.
  *
  * There is no way to shortcut this: minting an approval requires the session
@@ -663,7 +784,12 @@ async function verifyDoubleSubmit(page) {
   for (const [id, value] of Object.entries(fields)) {
     await page.fill(`[data-testid=field-${id}] input, [data-testid=field-${id}] textarea`, value);
   }
-  await page.selectOption("[data-testid=field-attending_attestation] select", "Attested");
+  // Driven from the keyboard, not selectOption: a scripted value write is
+  // recorded as a script's, and the review panel refuses to sign over it.
+  if (!(await attestAsHuman(page))) {
+    bad("the attestation can be set by a clinician", "provenance clinician", "not attributed to the clinician");
+    return;
+  }
   await page.click("[data-testid=field-tb_screen] .evidence-slot");
   await page.click("[data-testid=pick-tb_screen-doc-tb]");
 
@@ -716,7 +842,12 @@ async function verifySignatureVoiding(page) {
   for (const [id, value] of Object.entries(fields)) {
     await page.fill(`[data-testid=field-${id}] input, [data-testid=field-${id}] textarea`, value);
   }
-  await page.selectOption("[data-testid=field-attending_attestation] select", "Attested");
+  // Driven from the keyboard, not selectOption: a scripted value write is
+  // recorded as a script's, and the review panel refuses to sign over it.
+  if (!(await attestAsHuman(page))) {
+    bad("the attestation can be set by a clinician", "provenance clinician", "not attributed to the clinician");
+    return;
+  }
   await page.click("[data-testid=field-tb_screen] .evidence-slot");
   await page.click("[data-testid=pick-tb_screen-doc-tb]");
   if (!(await signInAsClinician(page))) {
@@ -854,14 +985,36 @@ async function verifyRegistrationIsIdempotent(page) {
     const calls = [];
     const signals = [];
     // A runtime that accumulates, attached while the retry loop is polling.
+    // Async and refusing, like the real thing. A synchronous mock that accepts
+    // everything cannot fail, and one built to the exact signature the code
+    // assumes proves only that the code agrees with itself. This one returns a
+    // promise, rejects a duplicate name the way the spec says a runtime must,
+    // and records the annotation members it was actually sent.
+    const seen = new Set();
+    const annotations = [];
     document.modelContext = {
       registerTool(def, opts) {
+        if (seen.has(def.name)) return Promise.reject(new Error("duplicate tool name"));
+        seen.add(def.name);
         calls.push(def.name);
+        annotations.push(Object.keys(def.annotations ?? {}));
         if (opts && opts.signal) signals.push(opts.signal);
+        return Promise.resolve();
       },
     };
+    window.__annotationKeys = annotations;
     await new Promise((r) => setTimeout(r, 7000));
-    return { total: calls.length, distinct: new Set(calls).size, signalled: signals.length };
+    return {
+      total: calls.length,
+      distinct: new Set(calls).size,
+      signalled: signals.length,
+      // WebMCP's ToolAnnotations carries only these two. Anything else is
+      // dropped by the runtime, so sending more is noise that reads as rigour.
+      strayAnnotations: [
+        ...new Set(annotations.flat().filter((k) => k !== "readOnlyHint" && k !== "untrustedContentHint")),
+      ],
+      untrustedHinted: annotations.filter((k) => k.includes("untrustedContentHint")).length,
+    };
   });
 
   result.total === result.distinct
@@ -871,6 +1024,14 @@ async function verifyRegistrationIsIdempotent(page) {
   result.signalled === result.total && result.total > 0
     ? ok("each registration carries a signal so it can be withdrawn")
     : bad("each registration can be withdrawn", "a signal per tool", `${result.signalled} of ${result.total}`);
+
+  result.strayAnnotations.length === 0
+    ? ok("annotations carry only the members WebMCP defines")
+    : bad("annotations match the WebMCP dictionary", "readOnlyHint and untrustedContentHint only", result.strayAnnotations.join(", "));
+
+  result.untrustedHinted === result.total && result.total > 0
+    ? ok("every tool declares whether its result carries untrusted content")
+    : bad("untrustedContentHint is declared", `${result.total} tools`, `${result.untrustedHinted}`);
 
   await verifyJudgmentFieldsAreRefused(page);
 }
@@ -898,14 +1059,25 @@ async function verifyJudgmentFieldsAreRefused(page) {
     await call("check_payer_rules", { payer: "uhc" });
 
     const fill = tools.get("fill_field");
+    const attach = tools.get("attach_evidence");
     const attempt = await fill.execute({ fieldId: "attending_attestation", value: "Attested" });
     const necessity = await fill.execute({ fieldId: "medical_necessity", value: "Patient has failed all therapy." });
+    // The other write path. Refused by fill_field, an agent would reach for
+    // this one next: it also writes formFields, and it used to accept every
+    // field id, which cleared the clinician's outstanding work and silently
+    // overwrote anything already typed there.
+    const attached = await attach.execute({ fieldId: "attending_attestation", docId: "doc-tb" });
+    const attachedNecessity = await attach.execute({ fieldId: "medical_necessity", docId: "doc-tb" });
     const state = await call("validate_submission", {});
     const enumIds = fill.inputSchema?.properties?.fieldId?.enum ?? [];
+    const attachEnum = attach.inputSchema?.properties?.fieldId?.enum ?? [];
 
     return {
       attestationStatus: attempt?.status ?? attempt?.structuredContent?.status,
       necessityStatus: necessity?.status ?? necessity?.structuredContent?.status,
+      attachStatus: attached?.status ?? attached?.structuredContent?.status,
+      attachNecessityStatus: attachedNecessity?.status ?? attachedNecessity?.structuredContent?.status,
+      attachEnumHasJudgment: attachEnum.includes("attending_attestation") || attachEnum.includes("medical_necessity"),
       enumHasJudgment: enumIds.includes("attending_attestation") || enumIds.includes("medical_necessity"),
       validation: state?.validation ?? state?.structuredContent?.validation ?? null,
       rawState: JSON.stringify(state ?? null).slice(0, 200),
@@ -918,10 +1090,15 @@ async function verifyJudgmentFieldsAreRefused(page) {
   }
 
   check("fill_field refuses the attending attestation", probe.attestationStatus, "refused");
+  check("attach_evidence refuses it too, rather than being a second way in", probe.attachStatus, "refused");
+  check("attach_evidence refuses the medical-necessity statement", probe.attachNecessityStatus, "refused");
   check("fill_field refuses the medical-necessity statement", probe.necessityStatus, "refused");
   probe.enumHasJudgment === false
     ? ok("judgment fields are absent from the fill_field schema enum")
     : bad("judgment fields are absent from the enum", "absent", "present");
+  probe.attachEnumHasJudgment === false
+    ? ok("and from the attach_evidence schema enum")
+    : bad("judgment fields are absent from the attach_evidence enum", "absent", "present");
   // The refusal has to be visible in the submission state, not just in the tool
   // response: the failure mode being guarded against is a form that reports
   // itself ready to sign because an agent filled the clinician's fields.

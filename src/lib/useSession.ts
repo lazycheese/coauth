@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { postJson } from "./http";
+import { useCoAuth } from "../store/coauthStore";
 
 export interface Clinician {
   id: string;
@@ -70,6 +71,9 @@ export function useSession() {
     } catch {
       /* the cookie expires on its own; refreshing tells us what actually happened */
     }
+    // An approval belongs to the clinician who signed it. Leaving it in place
+    // after they sign out left the submit button live with nobody on screen.
+    useCoAuth.getState().clearApproval();
     await refresh();
   }, [refresh]);
 

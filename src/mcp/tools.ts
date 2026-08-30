@@ -25,6 +25,9 @@ function summarize(v: ReturnType<typeof store>["validation"]) {
 export const tools: ToolDef[] = [
   {
     name: "load_patient_context",
+    // Returns chart prose and scanned outside records: text this page did not
+    // write and cannot vouch for.
+    untrustedContentHint: true,
     title: "Load patient context",
     description: "Load a patient's structured clinical record into the workspace.",
     inputSchema: schemas.load_patient_context,
@@ -153,12 +156,39 @@ export const tools: ToolDef[] = [
   {
     name: "attach_evidence",
     title: "Attach evidence",
-    description: "Link a clinical document to a field that requires supporting evidence.",
+    description:
+      "Link a clinical document to a field that requires supporting evidence. Only evidence fields accept a document; clinician-judgment fields are refused.",
     inputSchema: schemas.attach_evidence,
     readOnlyHint: false,
     destructiveHint: false,
     idempotentHint: true,
     execute: ({ fieldId, docId }, ctx?: ToolCtx) => {
+      const target = store().payerRules?.requiredFields.find((f) => f.id === fieldId);
+      // The same gate fill_field applies. Guarding one write path and leaving
+      // the other open meant an agent could put a document id over the
+      // attending attestation and clear the clinician's outstanding work - and
+      // silently overwrite any prose already typed into it.
+      if (target?.requiresHumanJudgment) {
+        store().logActivity(actorOf(ctx), "attach_evidence", `REFUSED - ${fieldId} is a clinician-judgment field`);
+        return {
+          status: "refused",
+          isError: true,
+          summary: `${fieldId} (${target.label}) requires the clinician's own judgment and does not take an attached document. Use draft_field to propose wording instead.`,
+          fieldId,
+          requiresHumanJudgment: true,
+          useInstead: "draft_field",
+        };
+      }
+      if (target && target.type !== "evidence") {
+        store().logActivity(actorOf(ctx), "attach_evidence", `REFUSED - ${fieldId} is not an evidence field`);
+        return {
+          status: "refused",
+          isError: true,
+          summary: `${fieldId} (${target.label}) is not an evidence field, so it does not take a document. Use fill_field to set its value.`,
+          fieldId,
+          useInstead: "fill_field",
+        };
+      }
       store().attach(fieldId, docId);
       store().setProvenance(fieldId, { by: "agent", source: "attached document" });
       const v = store().runValidation();
@@ -226,6 +256,8 @@ export const tools: ToolDef[] = [
   },
   {
     name: "get_submission_state",
+    // Echoes record-derived values and any injection findings alongside them.
+    untrustedContentHint: true,
     title: "Get submission state",
     description: "Read the whole current workspace: the loaded patient, the payer, every field value with who set it, outstanding conflicts, the denial-risk score, and whether the clinician has signed. Call this after reconnecting, or at any point you are unsure what has already been done.",
     inputSchema: schemas.get_submission_state,

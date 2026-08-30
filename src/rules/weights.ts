@@ -82,6 +82,16 @@ export const CONFLICT: Record<string, Weighted> = {
     because:
       "A dose the payer cannot match to the label invites a denial or a downward adjustment, but is frequently resolved by a pharmacist rather than refused.",
   },
+  "dose-implausible": {
+    points: 30,
+    because:
+      "An order-of-magnitude dose error is weighted well above an out-of-range dose because the two fail differently. A dose the payer disputes is argued about; a thousand-fold error that nobody catches is dispensed. It blocks signature rather than adding risk, because the clinician confirming they meant it is the only thing that distinguishes the two.",
+  },
+  "tb-screen-stale": {
+    points: 26,
+    because:
+      "A screening result older than the payer's window is not evidence about the patient now, and both payer policies name a window in writing. Weighted just below an active contraindication: the risk is unknown rather than known-bad, which is exactly why it has to be resolved before a biologic starts.",
+  },
   "dose-unreadable": {
     points: 14,
     because:

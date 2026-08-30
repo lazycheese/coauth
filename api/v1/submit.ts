@@ -97,12 +97,12 @@ export default async function handler(req: Request): Promise<Response> {
   if (payload.patientId !== patientId) {
     return reject("patient_mismatch", "The approval was signed for a different patient.", "Re-sign for the current chart.");
   }
-  const digest = await digestOf(secret, payer, patientId, formFields);
+  const digest = await digestOf(secret, payer, patientId, formFields, overrides);
   if (!timingSafeEqual(digest, payload.digest)) {
     return reject(
       "form_modified",
       "The submission changed after it was signed.",
-      "The clinician must review and sign the current version."
+      "The clinician must review and sign the current version. This covers the clinical overrides as well as the form fields: an override is part of what was attested to."
     );
   }
 
@@ -147,6 +147,10 @@ export default async function handler(req: Request): Promise<Response> {
         npi: payload.npi,
         patientId: payload.patientId,
         attestation: payload.attestation,
+        // The rationale the clinician gave for each override they recorded.
+        // Filing a biologic over a positive TB screen is a clinical decision,
+        // and the decision is not auditable if only its effect is stored.
+        overrides,
         signedAt: new Date(payload.ts).toISOString(),
         digest: payload.digest,
         approvalId: payload.jti,

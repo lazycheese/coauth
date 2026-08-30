@@ -28,9 +28,21 @@ function FieldRow({ field, flash }: { field: FieldDef; flash: boolean }) {
   const docs = useCoAuth((s) => s.docs);
   const attach = useCoAuth((s) => s.attach);
   const [picking, setPicking] = useState(false);
-  const edit = (v: string) => {
+  // Provenance follows the event, not the code path.
+  //
+  // A React change handler fires for a real keystroke and for a programmatic
+  // value write dispatched by a script, and only the browser can tell them
+  // apart: `isTrusted` is true exactly for events the user agent generated.
+  // Recording every change as the clinician's meant an agent with DOM access
+  // could set the attending attestation and have it counted as human. It is now
+  // attributed to whoever actually produced it, which is what the signing gate
+  // reads.
+  const edit = (v: string, trusted: boolean) => {
     setField(field.id, v);
-    setProvenance(field.id, { by: "clinician" });
+    setProvenance(field.id, { by: trusted ? "clinician" : "agent" });
+    if (!trusted) {
+      logActivity("agent", "dom_write", `${field.id} set by a script, not by the clinician`);
+    }
     runValidation();
   };
   const ProvBadge = prov && value ? (
@@ -105,7 +117,7 @@ function FieldRow({ field, flash }: { field: FieldDef; flash: boolean }) {
           <select
             value={(value as string) ?? ""}
             onFocus={() => setFocused(field.id)}
-            onChange={(e) => edit(e.target.value)}
+            onChange={(e) => edit(e.target.value, e.nativeEvent.isTrusted)}
           >
             <option value="">-</option>
             {field.options?.map((o) => (
@@ -117,14 +129,14 @@ function FieldRow({ field, flash }: { field: FieldDef; flash: boolean }) {
             rows={2}
             value={(value as string) ?? ""}
             onFocus={() => setFocused(field.id)}
-            onChange={(e) => edit(e.target.value)}
+            onChange={(e) => edit(e.target.value, e.nativeEvent.isTrusted)}
           />
         ) : (
           <input
             type="text"
             value={(value as string) ?? ""}
             onFocus={() => setFocused(field.id)}
-            onChange={(e) => edit(e.target.value)}
+            onChange={(e) => edit(e.target.value, e.nativeEvent.isTrusted)}
           />
         )}
       </label>

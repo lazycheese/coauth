@@ -177,9 +177,13 @@ function invalidateApproval(s: CoAuthState): Partial<CoAuthState> {
  * JSON.stringify's second argument, which is a replacer allowlist that only
  * incidentally fixed key order - and which would have silently filtered the
  * inner keys of any non-flat value. */
-function hashFields(fields: Record<string, unknown>): string {
+function hashFields(fields: Record<string, unknown>, overrides: Record<string, string> = {}): string {
   const keys = Object.keys(fields ?? {}).sort();
-  const str = JSON.stringify(keys.map((k) => [k, fields[k] ?? null]));
+  const oKeys = Object.keys(overrides ?? {}).sort();
+  const str = JSON.stringify([
+    keys.map((k) => [k, fields[k] ?? null]),
+    oKeys.map((k) => [k, overrides[k] ?? null]),
+  ]);
   let h = 5381;
   for (let i = 0; i < str.length; i++) h = ((h << 5) + h + str.charCodeAt(i)) | 0;
   return "sig_" + (h >>> 0).toString(16);
@@ -284,7 +288,11 @@ export const useCoAuth = create<CoAuthState>((set, get) => ({
 
   sign: async (attestation) => {
     const s0 = get();
-    const localHash = hashFields(s0.formFields);
+    // Covers the overrides as well as the fields. Recording an override runs
+    // invalidateApproval, but it leaves formFields untouched - so a guard that
+    // hashed only the fields would pass, and the token would be reinstated over
+    // the override set that was current when signing began.
+    const localHash = hashFields(s0.formFields, s0.overrides);
 
     // Ask the signing service to mint the token. Only a server-minted token can
     // be verified at submit time, and minting requires an authenticated
@@ -333,8 +341,8 @@ export const useCoAuth = create<CoAuthState>((set, get) => ({
     // invalidateApproval; writing the token unconditionally here would resurrect
     // it over values the clinician never saw and clear the voided flag, leaving
     // a signature on screen that covers a different form. Discard instead.
-    if (hashFields(get().formFields) !== localHash) {
-      get().setToast("The form changed while the signature was being issued, so it was discarded. Review the current values and sign again.");
+    if (hashFields(get().formFields, get().overrides) !== localHash) {
+      get().setToast("The submission changed while the signature was being issued, so it was discarded. Review the current values and sign again.");
       return null;
     }
 

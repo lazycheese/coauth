@@ -60,6 +60,16 @@ async function hmacHex(secret: string, message: string): Promise<string> {
   return Array.from(new Uint8Array(sig)).map((b) => b.toString(16).padStart(2, "0")).join("");
 }
 
+/** Constant-time string comparison, for credentials and MACs alike. */
+export function constantTimeEqual(a: string, b: string): boolean {
+  // Compare a fixed-length digest of each side rather than the raw strings, so
+  // a length difference does not leak through an early return.
+  let diff = a.length ^ b.length;
+  const n = Math.max(a.length, b.length);
+  for (let i = 0; i < n; i++) diff |= (a.charCodeAt(i) || 0) ^ (b.charCodeAt(i) || 0);
+  return diff === 0;
+}
+
 function timingSafeEqual(a: string, b: string): boolean {
   if (a.length !== b.length) return false;
   let diff = 0;
@@ -97,7 +107,16 @@ export async function readSession(req: Request): Promise<SessionPayload | null> 
   const match = cookie.match(new RegExp(`(?:^|;\\s*)${SESSION_COOKIE}=([^;]+)`));
   if (!match) return null;
 
-  const [body, mac] = decodeURIComponent(match[1]).split(".");
+  // decodeURIComponent throws on a malformed escape, and a cookie is caller
+  // input: a truncated or corrupted one used to come back as a platform 500
+  // with an HTML shell, from a browser that then had no way to recover.
+  let body: string | undefined;
+  let mac: string | undefined;
+  try {
+    [body, mac] = decodeURIComponent(match[1]).split(".");
+  } catch {
+    return null;
+  }
   if (!body || !mac) return null;
   if (!timingSafeEqual(await hmacHex(secret, body), mac)) return null;
 
@@ -105,8 +124,14 @@ export async function readSession(req: Request): Promise<SessionPayload | null> 
     const payload = JSON.parse(new TextDecoder().decode(unb64url(body))) as SessionPayload;
     if (!payload?.sub || !payload.exp || payload.exp < Date.now()) return null;
     // The directory is authoritative: a session for a clinician who no longer
-    // exists is not a session.
-    return CLINICIANS[payload.sub] ? payload : null;
+    // exists is not a session. Own-property lookup, so a `sub` of "constructor"
+    // does not resolve through the prototype chain.
+    if (!Object.prototype.hasOwnProperty.call(CLINICIANS, payload.sub)) return null;
+    // The directory is authoritative for the clinician's details, not the
+    // cookie. A session issued before a directory change would otherwise sign
+    // with a stale name or NPI.
+    const current = CLINICIANS[payload.sub];
+    return { ...payload, name: current.name, npi: current.npi, role: current.role };
   } catch {
     return null;
   }
@@ -127,7 +152,14 @@ export function sessionCookie(value: string, maxAgeSeconds: number): string {
  *
  * SameSite=Strict already keeps the cookie off cross-site requests; this
  * refuses the request outright so a cross-origin caller gets a clear error
- * rather than an unauthenticated one. */
+ * rather than an unauthenticated one.
+ *
+ * Note the localhost allowance: a request whose Origin is localhost is accepted
+ * whatever host it was sent to, so that development against a deployed API
+ * works. That makes this a same-origin check plus a development exemption, not
+ * a pure same-origin check. It is not load-bearing either way - the session
+ * cookie is required regardless, and SameSite=Strict is what actually keeps it
+ * off a cross-site request. */
 export function sameOrigin(req: Request): boolean {
   const origin = req.headers.get("origin");
   if (!origin) return true; // non-browser caller; the session is still required

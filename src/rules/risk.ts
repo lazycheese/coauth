@@ -160,6 +160,23 @@ const RULES: Rule[] = [
     const toMg = unit.startsWith("mc") || unit === "ug" ? 0.001 : unit.startsWith("g") ? 1000 : 1;
     const mg = Number(m[1]) * toMg;
     const [lo, hi] = drug.doseMgRange;
+
+    // An order-of-magnitude miss is a different kind of problem from a dose the
+    // payer will argue about. "40 mcg" for a 40 mg drug is a thousand-fold
+    // underdose, and a submission carrying one should not be signable at all
+    // without the clinician saying, in writing, that they meant it.
+    if (mg > 0 && (mg * 10 < lo || mg > hi * 10)) {
+      const factor = mg * 10 < lo ? Math.round(lo / mg) : Math.round(mg / hi);
+      return {
+        id: "dose-implausible",
+        severity: "critical",
+        label: "Dose is off by an order of magnitude",
+        detail: `${m[1]} ${unit} is ${mg} mg, roughly ${factor}x outside the ${lo}-${hi} mg labelled range for ${drug.name} (${drug.doseNote}). This is the shape of a unit or decimal error rather than a dosing decision. Correct it, or record an override stating the dose is intended.`,
+        requiresHumanOverride: true,
+        points: CONFLICT["dose-implausible"].points,
+        weightRationale: CONFLICT["dose-implausible"].because,
+      };
+    }
     if (mg < lo || mg > hi) {
       return {
         id: "dose-out-of-range",
@@ -239,17 +256,50 @@ const RULES: Rule[] = [
     if (!attached && !(statesResult && agreesWithChart)) {
       return {
         id: "tb-evidence-unusable",
-        severity: "high",
+        // Blocking, not advisory. A field reading "not done, pending" documents
+        // the absence of a screen, and a biologic started without one is the
+        // outcome the screening requirement exists to prevent.
+        severity: "critical",
         label: "TB screening evidence does not state a result",
         detail: lab
           ? `"${value}" is not a screening result that can be checked. The chart records TB (${lab.name}) as ${lab.value} on ${lab.date}. Attach the screening document, or record the result the chart supports.`
           : `"${value}" is not a screening result. Attach the TB screening document.`,
-        requiresHumanOverride: false,
+        requiresHumanOverride: true,
         points: CONFLICT["tb-evidence-unusable"].points,
         weightRationale: CONFLICT["tb-evidence-unusable"].because,
       };
     }
     return null;
+  },
+
+  // The screening has to be recent enough for the payer's written policy.
+  //
+  // Both policies name a window and nothing evaluated one, so a screen from
+  // three years ago satisfied the requirement. A stale screen is not evidence
+  // that the patient is clear now.
+  ({ formFields, patient, rules }) => {
+    const drug = getDrug(str(formFields["hcpcs_code"]));
+    if (!drug?.requiresTbScreen || !rules || !patient) return null;
+    if (!str(formFields["tb_screen"])) return null;
+    const maxAge = rules.criteria.tbScreenMaxAgeMonths;
+    if (!maxAge) return null;
+
+    const lab = patient.labs.find((l) => /TB|QuantiFERON/i.test(l.name));
+    if (!lab?.date) return null;
+    const when = Date.parse(lab.date);
+    if (Number.isNaN(when)) return null;
+
+    const ageMonths = (Date.now() - when) / (1000 * 60 * 60 * 24 * 30.44);
+    if (ageMonths <= maxAge) return null;
+    return {
+      id: "tb-screen-stale",
+      severity: "critical",
+      label: "TB screening is older than the payer allows",
+      detail: `${rules.name} requires TB screening within ${maxAge} months of starting a biologic. The screen on record is dated ${lab.date}, about ${Math.round(ageMonths)} months ago. Repeat the screening, or record an override documenting why the existing result still stands.`,
+      requiresHumanOverride: true,
+      points: CONFLICT["tb-screen-stale"].points,
+      weightRationale: CONFLICT["tb-screen-stale"].because,
+    };
   },
 
   // Step therapy, judged against the payer's numeric criteria using the chart

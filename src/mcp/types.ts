@@ -26,6 +26,10 @@ export interface ToolDef {
   destructiveHint?: boolean;
   /** Calling twice with the same input has the same effect as calling once. */
   idempotentHint?: boolean;
+  /** True when the tool's result carries text written outside this page - a
+   *  chart note, a scanned outside record, a payer file. WebMCP surfaces this
+   *  to the runtime so the agent treats the content as data, not direction. */
+  untrustedContentHint?: boolean;
   execute: Executor;
 }
 
@@ -35,13 +39,7 @@ export interface WebMcpToolPayload {
   title: string;
   description: string;
   inputSchema: unknown;
-  annotations: {
-    title: string;
-    readOnlyHint: boolean;
-    destructiveHint: boolean;
-    idempotentHint: boolean;
-    openWorldHint: boolean;
-  };
+  annotations: { readOnlyHint: boolean; untrustedContentHint: boolean };
   execute: (input: unknown) => Promise<{
     content: { type: "text"; text: string }[];
     structuredContent: ToolResult;
@@ -57,7 +55,7 @@ export interface WebMcpToolPayload {
  */
 export interface ModelContext {
   /** The signal, where a runtime supports it, is how a tool is withdrawn. */
-  registerTool(tool: WebMcpToolPayload, options?: { signal?: AbortSignal }): void;
+  registerTool(tool: WebMcpToolPayload, options?: { signal?: AbortSignal }): Promise<void> | void;
 }
 
 /** A window or document that may carry a WebMCP runtime. */

@@ -1,5 +1,14 @@
 import { signingSecret } from "../_sign";
-import { CLINICIANS, clinicianPassphrase, issueSession, sessionCookie, sameOrigin, SESSION_TTL_MS } from "../_session";
+import { rateLimitLogin } from "../_ratelimit";
+import {
+  CLINICIANS,
+  clinicianPassphrase,
+  issueSession,
+  sessionCookie,
+  sameOrigin,
+  constantTimeEqual,
+  SESSION_TTL_MS,
+} from "../_session";
 
 export const config = { runtime: "edge" };
 
@@ -22,6 +31,23 @@ export default async function handler(req: Request): Promise<Response> {
     return Response.json(
       { error: { code: "cross_origin", message: "Sign-in must come from this origin.", hint: "Use the CoAuth page." } },
       { status: 403, headers: H }
+    );
+  }
+
+  // Throttle before doing any work. One passphrase mints every signature on
+  // this deployment, so unlimited guesses against it is the weakest hinge in
+  // the whole gate.
+  const limit = await rateLimitLogin(req);
+  if (!limit.allowed) {
+    return Response.json(
+      {
+        error: {
+          code: "too_many_attempts",
+          message: "Too many sign-in attempts. Try again shortly.",
+          hint: `Wait ${limit.retryAfter} second(s) before trying again.`,
+        },
+      },
+      { status: 429, headers: { ...H, "Retry-After": String(limit.retryAfter) } }
     );
   }
 
@@ -50,18 +76,24 @@ export default async function handler(req: Request): Promise<Response> {
     );
   }
 
-  const clinician = CLINICIANS[String(body?.clinicianId ?? "")];
+  // Own-property lookup. A plain index walks the prototype chain, so
+  // clinicianId "constructor" resolved to Object and minted a cookie whose
+  // subject could never be read back.
+  const id = String(body?.clinicianId ?? "");
+  const clinician = Object.prototype.hasOwnProperty.call(CLINICIANS, id) ? CLINICIANS[id] : undefined;
   const supplied = String(body?.passphrase ?? "");
 
-  // One message for both failure modes, so this cannot be used to enumerate
-  // which clinician ids exist.
-  if (!clinician || supplied !== passphrase) {
+  // Compared in constant time, and always compared, so neither the answer nor
+  // how long it took distinguishes a wrong id from a wrong passphrase. One
+  // message for both, so this cannot be used to enumerate clinician ids.
+  const passphraseOk = constantTimeEqual(supplied, passphrase);
+  if (!clinician || !passphraseOk) {
     return Response.json(
       {
         error: {
           code: "invalid_credentials",
           message: "That clinician id and passphrase were not accepted.",
-          hint: "Check the credentials shown on the sign-in panel.",
+          hint: "The demo clinician credentials are in the project README, deliberately not in the page.",
         },
       },
       { status: 401, headers: H }

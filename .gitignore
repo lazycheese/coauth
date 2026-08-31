@@ -16,3 +16,8 @@ coauth-*.png
 .env*
 # Vercel marketplace tooling artefact, not product code
 skills-lock.json
+
+# local artifacts (Devpost screenshots, playwright output)
+gallery/
+.playwright-mcp/
+mobile-compare*.png

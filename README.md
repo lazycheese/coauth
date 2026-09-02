@@ -27,8 +27,8 @@ WebMCP and true human+agent collaboration are for.
 Signing requires an authenticated clinician, so the demo ships with a seeded
 directory and one passphrase:
 
-    Clinician:  Dr. Ana Alvarez  (or Dr. Jae Park)
-    Passphrase: coauth-demo-clinician-2026
+    Clinician ID: doc
+    Passphrase:   demo1234
 
 The passphrase is deliberately **not** shown anywhere in the page. It is a
 credential, and a credential printed into the DOM is a credential any agent

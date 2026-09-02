@@ -26,6 +26,8 @@ export interface Clinician {
  * list is static. */
 export const CLINICIANS: Record<string, Clinician> = {
   "a-alvarez": { id: "a-alvarez", name: "Dr. Ana Alvarez", npi: "1477539821", role: "Rheumatology" },
+  // Short alias for the demo sign-in, same identity as a-alvarez.
+  "doc": { id: "doc", name: "Dr. Ana Alvarez", npi: "1477539821", role: "Rheumatology" },
   "j-park": { id: "j-park", name: "Dr. Jae Park", npi: "1093847562", role: "Rheumatology" },
 };
 

@@ -22,27 +22,6 @@ a human is *legally required* to stay in the loop. That combination - agents are
 great at the mechanics, humans are mandatory for judgment - is exactly what
 WebMCP and true human+agent collaboration are for.
 
-## Signing in (for reviewers)
-
-Signing requires an authenticated clinician, so the demo ships with a seeded
-directory and one passphrase:
-
-    Clinician ID: doc
-    Passphrase:   demo1234
-
-The passphrase is deliberately **not** shown anywhere in the page. It is a
-credential, and a credential printed into the DOM is a credential any agent
-driving the page can read - which would quietly reopen the hole the sign-in
-exists to close. So it lives here, where a person reading the repository finds
-it and an agent working the form does not.
-
-That is the trade-off being made, stated plainly: a shared demo passphrase is
-not identity assurance, and a real deployment needs a real identity provider
-and per-clinician credentials. What the demo does establish is the boundary -
-that minting an approval requires something the agent cannot obtain, and that
-the signer recorded in the audit trail is whoever authenticated rather than a
-string in a request body.
-
 ## What the agent can and cannot do
 
 - **Can:** load the patient record, read payer rules, fill every non-judgment
@@ -122,6 +101,27 @@ with your own prompts, e.g. *"Start a prior auth for Marcus Lee's Humira request
 with Aetna."* Or click **Scripted walkthrough** to watch the agent half of the
 flow run on its own - it stops at the signature, which is the clinician's - or
 press **Cmd-K / Ctrl-K** for the tool command palette.
+
+## Signing in (for reviewers)
+
+Signing requires an authenticated clinician, so the demo ships with a seeded
+directory and one passphrase:
+
+    Clinician ID: doc
+    Passphrase:   demo1234
+
+The passphrase is deliberately **not** shown anywhere in the page. It is a
+credential, and a credential printed into the DOM is a credential any agent
+driving the page can read - which would quietly reopen the hole the sign-in
+exists to close. So it lives here, where a person reading the repository finds
+it and an agent working the form does not.
+
+That is the trade-off being made, stated plainly: a shared demo passphrase is
+not identity assurance, and a real deployment needs a real identity provider
+and per-clinician credentials. What the demo does establish is the boundary -
+that minting an approval requires something the agent cannot obtain, and that
+the signer recorded in the audit trail is whoever authenticated rather than a
+string in a request body.
 
 ## Verifying it
 

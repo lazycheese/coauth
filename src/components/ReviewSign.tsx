@@ -139,6 +139,17 @@ export function ReviewSign() {
           <div className="success-title">Submitted to payer</div>
           <div className="success-id">{submitResult.confirmationId}</div>
           <div className="success-sub">Clinician-signed · conflict-checked · audit-logged</div>
+          {submitResult.x12 && (
+            <details className="x12" data-testid="x12-278">
+              <summary>View X12 278 (payer EDI)</summary>
+              <p className="x12-note">
+                The transaction a payer actually receives. A prior authorization is exchanged as an X12 278
+                Health Care Services Review - the HIPAA-mandated authorization transaction - not as JSON. Every
+                value the agent filled and the clinician signed maps to a segment below.
+              </p>
+              <pre>{submitResult.x12}</pre>
+            </details>
+          )}
         </div>
       )}
 

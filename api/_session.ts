@@ -34,14 +34,46 @@ export const CLINICIANS: Record<string, Clinician> = {
 export const SESSION_COOKIE = "coauth_session";
 export const SESSION_TTL_MS = 8 * 60 * 60 * 1000;
 
-/** The passphrase the demo clinicians authenticate with.
+/** The passphrase a SPECIFIC clinician authenticates with.
  *
- * Absent, there is no way to authenticate, so no approval can be minted and
- * nothing can be submitted. That is the intended failure: an unconfigured
- * deployment refuses to sign rather than signing for anyone. */
-export function clinicianPassphrase(): string | null {
-  const s = (globalThis as any).process?.env?.COAUTH_CLINICIAN_PASSPHRASE;
-  return typeof s === "string" && s.length >= 8 ? s : null;
+ * Per clinician, not shared. The identity stamped into a signed attestation -
+ * the signer's name and NPI - is only meaningful if producing it required
+ * something that clinician alone holds. A single shared secret would mint a
+ * signature under any clinician's name for anyone who knew it, so the NPI in
+ * the audit trail would not be bound to the person typing. Each clinician's
+ * credential is distinct, so signing as Dr. Alvarez requires Dr. Alvarez's
+ * secret and nobody else's.
+ *
+ * Configured as a JSON object in COAUTH_CLINICIAN_PASSPHRASES, mapping clinician
+ * id to passphrase. A real deployment would resolve this against an identity
+ * provider with MFA rather than a static map; the shape - one credential per
+ * identity, verified server-side - is the point.
+ *
+ * Absent or malformed, there is no way to authenticate, so no approval can be
+ * minted and nothing can be submitted. That is the intended failure: an
+ * unconfigured deployment refuses to sign rather than signing for anyone. */
+export function clinicianPassphrase(clinicianId: string): string | null {
+  const raw = (globalThis as any).process?.env?.COAUTH_CLINICIAN_PASSPHRASES;
+  if (typeof raw !== "string" || !raw) return null;
+  let map: Record<string, unknown>;
+  try {
+    map = JSON.parse(raw);
+  } catch {
+    return null;
+  }
+  const p = Object.prototype.hasOwnProperty.call(map, clinicianId) ? map[clinicianId] : undefined;
+  return typeof p === "string" && p.length >= 8 ? p : null;
+}
+
+/** True when the deployment can authenticate anyone at all. */
+export function clinicianAuthConfigured(): boolean {
+  const raw = (globalThis as any).process?.env?.COAUTH_CLINICIAN_PASSPHRASES;
+  if (typeof raw !== "string" || !raw) return false;
+  try {
+    return Object.keys(JSON.parse(raw)).length > 0;
+  } catch {
+    return false;
+  }
 }
 
 function b64url(bytes: Uint8Array): string {

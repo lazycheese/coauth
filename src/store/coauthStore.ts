@@ -116,7 +116,7 @@ interface CoAuthState {
   auditLog: AuditEntry[];
   activity: ActivityEntry[];
   focusedField: string | null;
-  submitResult: { status: string; reason?: string; confirmationId?: string } | null;
+  submitResult: { status: string; reason?: string; confirmationId?: string; x12?: string } | null;
   /** True when a signature was voided by a change and has not been replaced. */
   signatureVoided: boolean;
   /** Which scripted run, if any, is currently driving the workspace. */

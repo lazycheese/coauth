@@ -35,7 +35,9 @@
               "type": "string",
               "enum": [
                 "jane-doe",
-                "marcus-lee"
+                "marcus-lee",
+                "ana-torres",
+                "priya-raman"
               ]
             }
           }

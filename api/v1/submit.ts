@@ -1,6 +1,8 @@
 import { signingSecret, digestOf, mint, timingSafeEqual, TOKEN_TTL_MS, type ApprovalPayload } from "../_sign";
 import { claimOnce } from "../_nonce";
 import { clinicalRefusal } from "../_clinical";
+import { getPatient, getPayerRules } from "../../src/data/seed";
+import { toX12_278 } from "../../src/lib/x12";
 
 export const config = { runtime: "edge" };
 
@@ -136,11 +138,22 @@ export default async function handler(req: Request): Promise<Response> {
     );
   }
 
+  // The filed submission, rendered as the X12 278 transaction a payer actually
+  // receives - so the response speaks the real prior-authorization EDI, not
+  // only our own JSON.
+  const patientRec = getPatient(patientId);
+  const payerRec = getPayerRules(payer);
+  const x12 =
+    patientRec && payerRec
+      ? toX12_278({ payer: payerRec, patient: patientRec, formFields, confirmationId, npi: payload.npi, signer: payload.signer })
+      : undefined;
+
   return Response.json(
     {
       status: "submitted",
       confirmationId,
       replayProtection: claim.protection,
+      x12_278: x12,
       audit: {
         signer: payload.signer,
         clinicianId: payload.clinicianId,

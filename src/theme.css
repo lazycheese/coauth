@@ -413,3 +413,9 @@ body {
 .audit-voided .audit-row, .audit-voided { opacity: .7; }
 .audit-voided span:first-child { text-decoration: line-through; }
 .verify-voided { color: #b7791f; }
+
+/* ---- X12 278 EDI view on the confirmation card ---- */
+.x12 { margin-top: 10px; text-align: left; }
+.x12 > summary { cursor: pointer; font-size: 12px; font-weight: 600; color: #1b5e20; }
+.x12-note { font-size: 11px; color: #33415c; line-height: 1.45; margin: 6px 0; }
+.x12 pre { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; font-size: 10.5px; line-height: 1.4; background: #0e1b2e; color: #d6e2ff; padding: 10px 12px; border-radius: 6px; overflow-x: auto; white-space: pre; margin: 0; }

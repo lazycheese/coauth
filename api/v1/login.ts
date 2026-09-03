@@ -3,6 +3,7 @@ import { rateLimitLogin } from "../_ratelimit";
 import {
   CLINICIANS,
   clinicianPassphrase,
+  clinicianAuthConfigured,
   issueSession,
   sessionCookie,
   sameOrigin,
@@ -34,9 +35,8 @@ export default async function handler(req: Request): Promise<Response> {
     );
   }
 
-  // Throttle before doing any work. One passphrase mints every signature on
-  // this deployment, so unlimited guesses against it is the weakest hinge in
-  // the whole gate.
+  // Throttle before doing any work. A guessing attack against a clinician's
+  // credential is the weakest hinge in the gate, so it is bounded here.
   const limit = await rateLimitLogin(req);
   if (!limit.allowed) {
     return Response.json(
@@ -52,14 +52,13 @@ export default async function handler(req: Request): Promise<Response> {
   }
 
   const secret = signingSecret();
-  const passphrase = clinicianPassphrase();
-  if (!secret || !passphrase) {
+  if (!secret || !clinicianAuthConfigured()) {
     return Response.json(
       {
         error: {
           code: "auth_unavailable",
           message: "This deployment cannot authenticate clinicians.",
-          hint: "Set COAUTH_SIGNING_SECRET and COAUTH_CLINICIAN_PASSPHRASE. Without both, no approval can be minted and nothing can be submitted.",
+          hint: "Set COAUTH_SIGNING_SECRET and COAUTH_CLINICIAN_PASSPHRASES (a JSON map of clinician id to passphrase). Without both, no approval can be minted and nothing can be submitted.",
         },
       },
       { status: 503, headers: H }
@@ -83,11 +82,14 @@ export default async function handler(req: Request): Promise<Response> {
   const clinician = Object.prototype.hasOwnProperty.call(CLINICIANS, id) ? CLINICIANS[id] : undefined;
   const supplied = String(body?.passphrase ?? "");
 
-  // Compared in constant time, and always compared, so neither the answer nor
-  // how long it took distinguishes a wrong id from a wrong passphrase. One
+  // Each clinician has their own passphrase, so this resolves the one for the
+  // id being claimed. Compared in constant time against a fixed-length stand-in
+  // when the clinician or their passphrase is unknown, so neither the answer
+  // nor how long it took distinguishes a wrong id from a wrong passphrase. One
   // message for both, so this cannot be used to enumerate clinician ids.
-  const passphraseOk = constantTimeEqual(supplied, passphrase);
-  if (!clinician || !passphraseOk) {
+  const expected = clinician ? clinicianPassphrase(id) : null;
+  const passphraseOk = constantTimeEqual(supplied, expected ?? "\u0000unmatchable-sentinel-value");
+  if (!clinician || !expected || !passphraseOk) {
     return Response.json(
       {
         error: {

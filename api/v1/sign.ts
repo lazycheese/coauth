@@ -92,7 +92,10 @@ export default async function handler(req: Request): Promise<Response> {
 
   // Step-up: the session says who is here, the credential says they are the one
   // asking for this signature.
-  const expected = clinicianPassphrase();
+  // The credential belongs to the clinician who authenticated, taken from the
+  // session (session.sub), never from the request. Signing as this clinician
+  // requires this clinician's secret.
+  const expected = clinicianPassphrase(session.sub);
   if (!expected || !constantTimeEqual(String(body?.passphrase ?? ""), expected)) {
     return err(
       403,

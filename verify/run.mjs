@@ -141,7 +141,7 @@ async function verifyApprovalGate() {
   }
   check("a wrong passphrase is refused", badCreds.status, 401);
 
-  const login = await post("/api/v1/login", { clinicianId: "a-alvarez", passphrase });
+  const login = await post("/api/v1/login", { clinicianId: "doc", passphrase });
   check("a clinician can authenticate", login.json?.status, "authenticated");
   const cookie = (login.headers.get("set-cookie") ?? "").split(";")[0];
   if (!cookie.startsWith("coauth_session=")) {
@@ -178,7 +178,7 @@ async function verifyApprovalGate() {
   const token = await signOne();
   if (!token) { bad("an authenticated clinician can sign", "a token", "none"); return; }
   check("the signer comes from the session, not the body", token.signer, "Dr. Ana Alvarez");
-  check("the clinician id is recorded", token.clinicianId, "a-alvarez");
+  check("the clinician id is recorded", token.clinicianId, "doc");
 
   // 3. The clinical rules run server-side at mint time.
   const incomplete = await post(
@@ -955,7 +955,7 @@ async function signInAsClinician(page) {
   if (!passphrase) return false;
   const signin = await page.$("[data-testid=clinician-signin]");
   if (!signin) return true; // already authenticated in this browser context
-  await page.fill("[data-testid=signin-clinician]", "a-alvarez");
+  await page.fill("[data-testid=signin-clinician]", "doc");
   await page.fill("[data-testid=signin-passphrase]", passphrase);
   await page.click("[data-testid=signin-submit]");
   await page.waitForSelector("[data-testid=signer-identity]", { timeout: 15000 });

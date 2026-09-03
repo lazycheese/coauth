@@ -484,6 +484,7 @@ export const tools: ToolDef[] = [
         status?: string;
         confirmationId?: string;
         replayProtection?: "durable" | "best-effort";
+        x12_278?: string;
         error?: { code?: string; message?: string };
       } | null;
       try {
@@ -559,7 +560,7 @@ export const tools: ToolDef[] = [
           !e.confirmationId && !e.voided && e.ts === tokenAtSend.ts ? { ...e, confirmationId } : e
         ),
       }));
-      after.setSubmitResult({ status: "submitted", confirmationId });
+      after.setSubmitResult({ status: "submitted", confirmationId, x12: verdict.x12_278 });
       after.recordSubmission({
         confirmationId,
         payer: after.payerRules?.name ?? "-",

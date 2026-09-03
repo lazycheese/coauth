@@ -38,7 +38,7 @@ The agent CANNOT:
 
 - get_workflow_guidance() -> { recommendedSequence, rules, safety }
 - get_submission_state() -> { patient, payer, fields with provenance, conflicts, risk, signature }
-- load_patient_context({ patientId: "jane-doe" | "marcus-lee" | "ana-torres" })
+- load_patient_context({ patientId: "jane-doe" | "marcus-lee" | "ana-torres" | "priya-raman" })
 - check_payer_rules({ payer: "uhc" | "aetna" | "cigna" })
 - fill_field({ fieldId, value })
 - attach_evidence({ fieldId, docId })
